@@ -48,6 +48,33 @@
   </div>
 </div>
 
+<div class="modal" id="keysModal" hidden role="dialog" aria-modal="true" aria-labelledby="keysTitle">
+  <div class="modal-box keys-box">
+    <div class="row between">
+      <h2 id="keysTitle">⌨️ Raccourcis clavier</h2>
+      <button type="button" id="keysClose" class="small">Fermer</button>
+    </div>
+    <table class="keys-table">
+      <tbody>
+        <tr><th colspan="2">Lecture</th></tr>
+        <tr><td><kbd>Espace</kbd></td><td>Lancer ou mettre en pause la vidéo</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Reculer ou avancer d'une seconde</td></tr>
+        <tr><td><kbd>Maj</kbd> + <kbd>←</kbd> <kbd>→</kbd></td><td>Reculer ou avancer d'un dixième de seconde, pour un réglage précis</td></tr>
+        <tr><th colspan="2">Découpe</th></tr>
+        <tr><td><kbd>I</kbd></td><td>Placer le <b>début</b> de l'extrait à la position actuelle de la vidéo</td></tr>
+        <tr><td><kbd>O</kbd></td><td>Placer la <b>fin</b> de l'extrait à la position actuelle de la vidéo</td></tr>
+        <tr><td><kbd>P</kbd></td><td>Écouter l'extrait choisi, du début à la fin</td></tr>
+        <tr><td><kbd>A</kbd></td><td>Ajouter l'extrait à la liste, pour en télécharger plusieurs d'un coup</td></tr>
+        <tr><th colspan="2">Général</th></tr>
+        <tr><td><kbd>Entrée</kbd></td><td>Dans le champ du lien : charger la vidéo</td></tr>
+        <tr><td><kbd>?</kbd></td><td>Afficher cette aide</td></tr>
+        <tr><td><kbd>Échap</kbd></td><td>Fermer cette fenêtre</td></tr>
+      </tbody>
+    </table>
+    <p class="note mt">💡 Les raccourcis ne marchent pas pendant que tu écris dans un champ (lien, temps…), ni quand tu viens de cliquer dans le lecteur YouTube : clique ailleurs dans la fenêtre pour les réactiver.</p>
+  </div>
+</div>
+
 <main>
   <header>
     <img src="icon.png" alt="" width="40" height="40">
@@ -186,8 +213,7 @@
         </div>
       </div>
 
-      <p class="keys">Raccourcis : <kbd>I</kbd> début · <kbd>O</kbd> fin · <kbd>Espace</kbd> lecture/pause ·
-        <kbd>←</kbd><kbd>→</kbd> ±1 s · <kbd>Maj</kbd>+<kbd>←</kbd><kbd>→</kbd> ±0,1 s · <kbd>P</kbd> écouter l'extrait · <kbd>A</kbd> ajouter à la liste</p>
+      <button type="button" id="keysBtn" class="small mt">⌨️ Raccourcis clavier</button>
     </section>
 
     <section class="card">

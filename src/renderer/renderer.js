@@ -476,8 +476,19 @@ api.termsState().then(ok => { if (!ok) showTerms(true); });
 // ---------------------------------------------------------------------------
 // Raccourcis clavier (comme dans un logiciel de montage)
 // ---------------------------------------------------------------------------
+// Fenêtre d'aide des raccourcis : bouton, touche « ? », fermeture par Échap / bouton / clic à côté
+const showKeys = () => { $("keysModal").hidden = false; $("keysClose").focus(); };
+const hideKeys = () => { $("keysModal").hidden = true; };
+$("keysBtn").onclick = showKeys;
+$("keysClose").onclick = hideKeys;
+$("keysModal").addEventListener("click", e => { if (e.target === $("keysModal")) hideKeys(); });
 document.addEventListener("keydown", e => {
-  if (!info || $("editor").hidden || !$("terms").hidden) return;
+  if (!$("keysModal").hidden && e.key === "Escape") { hideKeys(); e.preventDefault(); return; }
+  if (e.key === "?" && $("terms").hidden && !e.target.closest?.("input, select, textarea")) { showKeys(); e.preventDefault(); }
+});
+
+document.addEventListener("keydown", e => {
+  if (!info || $("editor").hidden || !$("terms").hidden || !$("keysModal").hidden) return;
   const t = e.target;
   if (t.closest?.("input, select, textarea, [contenteditable]") || e.ctrlKey || e.altKey || e.metaKey) return;
   const hasCut = !!info.duration;

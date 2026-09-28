@@ -130,6 +130,13 @@ footer #folderLink { word-break: break-all; }
 kbd { display: inline-block; min-width: 20px; padding: 0 5px; border: 1px solid var(--line); border-bottom-width: 2px;
   border-radius: 5px; background: var(--bg); font: 12px/18px "Segoe UI", system-ui, sans-serif; text-align: center; color: var(--text); }
 
+/* Fenêtre d'aide des raccourcis */
+.keys-box { width: min(620px, 100%); }
+.keys-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.keys-table th { text-align: left; padding: 14px 0 4px; color: var(--accent-ink); font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+.keys-table td { padding: 7px 0; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.keys-table td:first-child { width: 150px; white-space: nowrap; padding-right: 14px; }
+
 /* Historique */
 .history-list { list-style: none; margin: 10px 0 12px; padding: 0; max-height: 420px; overflow-y: auto; }
 .history-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
