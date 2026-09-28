@@ -1,7 +1,7 @@
 {
   "name": "videocutter",
   "productName": "VideoCutter",
-  "version": "1.3.0",
+  "version": "1.2.0",
   "description": "Télécharger un extrait précis d'une vidéo (YouTube, X, Instagram, Dailymotion…), en vidéo ou en musique.",
   "author": "Léo",
   "license": "GPL-3.0-or-later",
