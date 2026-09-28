@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: media:; media-src media:; frame-src https://www.youtube-nocookie.com; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VideoCutter</title>
+<link rel="stylesheet" href="style.css">
+<script src="renderer.js" defer></script>
+</head>
+<body>
+<div class="modal" id="terms" hidden role="dialog" aria-modal="true" aria-labelledby="termsTitle">
+  <div class="modal-box">
+    <h2 id="termsTitle">Conditions d'utilisation de VideoCutter</h2>
+    <div class="terms-text" tabindex="0">
+      <p>Merci de lire ces conditions avant d'utiliser VideoCutter. En cliquant sur « J'accepte », tu confirmes les avoir lues et acceptées.</p>
+
+      <h3>1. Ce qu'est VideoCutter</h3>
+      <p>VideoCutter est un outil gratuit et libre qui permet d'enregistrer sur ton ordinateur tout ou partie de vidéos et de sons publiés en ligne. Il se contente d'automatiser des outils existants (yt-dlp et FFmpeg) ; il n'héberge, ne fournit et ne propose aucun contenu.</p>
+
+      <h3>2. Ta responsabilité</h3>
+      <p>Tu es <b>seul responsable</b> de l'utilisation que tu fais de VideoCutter et des contenus que tu télécharges. En particulier, tu t'engages à :</p>
+      <ul>
+        <li>ne télécharger que des contenus que tu as le droit de télécharger : tes propres contenus, des contenus libres de droits, ou des contenus pour lesquels tu as l'autorisation de leur auteur ;</li>
+        <li>respecter le droit d'auteur, les droits voisins et le droit à l'image, ainsi que les lois de ton pays ;</li>
+        <li>respecter les conditions d'utilisation des sites dont proviennent les contenus ;</li>
+        <li>ne pas redistribuer, publier ou exploiter commercialement un contenu sans l'accord de ses ayants droit.</li>
+      </ul>
+
+      <h3>3. Absence de responsabilité de l'auteur</h3>
+      <p>L'auteur de VideoCutter <b>n'est pas responsable</b> de l'usage qui est fait du logiciel, ni des contenus téléchargés avec lui, ni des conséquences de leur téléchargement ou de leur utilisation. Il ne contrôle pas et n'approuve pas les contenus accessibles via les sites pris en charge.</p>
+
+      <h3>4. Aucune garantie</h3>
+      <p>VideoCutter est fourni « tel quel », <b>sans aucune garantie</b> de fonctionnement, d'exactitude ou d'adaptation à un usage particulier, conformément à sa licence (GNU GPL v3). Un site peut à tout moment modifier son fonctionnement ou bloquer les téléchargements.</p>
+
+      <h3>5. Tes données</h3>
+      <p>VideoCutter ne collecte aucune donnée personnelle et n'envoie rien à son auteur. Il n'a pas de serveur. Tes réglages et tes éventuelles connexions aux sites restent uniquement sur ton ordinateur.</p>
+
+      <h3>6. Sites tiers</h3>
+      <p>VideoCutter n'est affilié à aucun des sites qu'il prend en charge. Leurs noms sont cités uniquement pour indiquer la compatibilité.</p>
+    </div>
+    <label class="check"><input type="checkbox" id="termsCheck"> J'ai lu les conditions et je les accepte</label>
+    <div class="row between mt">
+      <button type="button" id="termsRefuse">Refuser et quitter</button>
+      <button type="button" id="termsAccept" class="primary" disabled>J'accepte</button>
+      <button type="button" id="termsClose" class="primary" hidden>Fermer</button>
+    </div>
+  </div>
+</div>
+
+<main>
+  <header>
+    <img src="icon.png" alt="" width="40" height="40">
+    <div>
+      <h1>VideoCutter</h1>
+      <p class="sub">YouTube, X, Instagram, TikTok, Dailymotion, Vimeo… colle un lien, choisis le passage, télécharge seulement ce morceau.</p>
+    </div>
+  </header>
+
+  <section class="card">
+    <form id="urlForm" class="row">
+      <input id="url" type="text" placeholder="Colle le lien d'une vidéo (https://…)" autocomplete="off" spellcheck="false" autofocus>
+      <button class="primary" id="loadBtn" type="submit">Charger</button>
+    </form>
+    <div id="loadErr" class="err" hidden></div>
+    <button type="button" id="loginHere" class="small login-here" hidden>🔑 Se connecter à ce site</button>
+  </section>
+
+  <section class="card" id="loginPanel" hidden>
+    <div class="row between">
+      <h2>Connexions aux sites</h2>
+      <button type="button" id="loginClose" class="small">Fermer</button>
+    </div>
+    <p class="note">Pour les vidéos réservées aux personnes connectées (compte privé, Vimeo, contenu pour membres…).
+      Tu te connectes dans une fenêtre de l'appli, séparée de ton navigateur. Ta connexion n'est utilisée que si un site l'exige.</p>
+
+    <div class="safe">
+      <b>🔒 Tes données restent chez toi</b>
+      <ul>
+        <li>L'appli n'a <b>aucun serveur</b> : rien n'est envoyé ni stocké ailleurs que sur ton PC.</li>
+        <li>Tes connexions sont enregistrées <b>uniquement sur ce PC</b>, chiffrées par Windows.</li>
+        <li>Tes <b>mots de passe</b> sont tapés directement sur la page officielle du site ; l'appli ne les enregistre pas.</li>
+        <li>L'appli ne communique qu'avec le site de la vidéo, et avec GitHub pour mettre à jour son outil de téléchargement.</li>
+        <li>Aucune statistique, aucune publicité, aucun pistage.</li>
+      </ul>
+    </div>
+
+    <h2 class="mt">Se connecter à</h2>
+    <div class="row" id="loginPresets">
+      <button type="button" data-site="instagram">Instagram</button>
+      <button type="button" data-site="x">X (Twitter)</button>
+      <button type="button" data-site="tiktok">TikTok</button>
+      <button type="button" data-site="vimeo">Vimeo</button>
+      <button type="button" data-site="facebook">Facebook</button>
+      <button type="button" data-site="reddit">Reddit</button>
+      <button type="button" data-site="youtube">YouTube</button>
+    </div>
+    <form id="loginOther" class="row mt">
+      <input id="loginUrl" type="text" placeholder="Autre site : https://…" autocomplete="off" spellcheck="false">
+      <button type="submit">Ouvrir</button>
+    </form>
+
+    <h2 class="mt">Connecté à</h2>
+    <ul id="loginList" class="login-list"></ul>
+    <button type="button" id="loginForgetAll" class="small">Tout déconnecter</button>
+  </section>
+
+  <div id="editor" hidden>
+    <section class="card">
+      <div class="player" id="player"></div>
+      <div class="meta"><b id="title"></b><span id="channel"></span></div>
+    </section>
+
+    <section class="card" id="noCut" hidden>
+      <p class="note">Ce site n'indique pas la durée de la vidéo : elle sera téléchargée en entier.</p>
+    </section>
+
+    <section class="card" id="cutCard">
+      <h2>Passage à garder</h2>
+      <div class="timeline">
+        <div class="track"></div>
+        <div class="range" id="range"></div>
+        <div class="head" id="head"></div>
+        <input type="range" id="startR" min="0" step="0.1" aria-label="Début">
+        <input type="range" id="endR" min="0" step="0.1" aria-label="Fin">
+      </div>
+      <div class="ticks"><span>0:00</span><span id="durLabel"></span></div>
+
+      <div class="times">
+        <div class="time">
+          <label for="startT">Début</label>
+          <div class="row">
+            <input id="startT" type="text" spellcheck="false">
+            <button type="button" id="setStart" title="Prendre la position actuelle de la vidéo">⤓ Position actuelle</button>
+          </div>
+        </div>
+        <div class="time">
+          <label for="endT">Fin</label>
+          <div class="row">
+            <input id="endT" type="text" spellcheck="false">
+            <button type="button" id="setEnd" title="Prendre la position actuelle de la vidéo">⤓ Position actuelle</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="clipinfo">
+        <span class="len">Durée de l'extrait : <b id="clipLen"></b></span>
+        <div class="row">
+          <button type="button" id="preview">▶ Écouter l'extrait</button>
+          <button type="button" id="reset">Tout garder</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Format</h2>
+      <div class="row">
+        <div class="seg" id="modeSeg">
+          <button type="button" data-mode="video" class="on">🎬 Vidéo</button>
+          <button type="button" data-mode="audio">🎵 Musique</button>
+        </div>
+        <select id="vFormat" aria-label="Format vidéo">
+          <option value="mp4" selected>MP4</option>
+          <option value="mkv">MKV</option>
+          <option value="webm">WEBM</option>
+          <option value="mov">MOV</option>
+          <option value="avi">AVI</option>
+        </select>
+        <select id="aFormat" aria-label="Format audio" hidden>
+          <option value="mp3" selected>MP3</option>
+          <option value="wav">WAV</option>
+          <option value="flac">FLAC</option>
+          <option value="m4a">M4A (AAC)</option>
+          <option value="ogg">OGG</option>
+          <option value="opus">OPUS</option>
+        </select>
+        <select id="quality" aria-label="Qualité vidéo">
+          <option value="auto" selected>Auto</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="card">
+      <button class="primary big" id="dlBtn" type="button">Télécharger l'extrait</button>
+      <div id="progress" hidden>
+        <div class="bar indet" id="bar"><div></div></div>
+        <div class="row between">
+          <span class="status" id="status"></span>
+          <button type="button" id="cancelBtn" class="small">Annuler</button>
+        </div>
+        <div id="result" hidden>
+          <div class="done">✓ Fichier enregistré</div>
+          <div class="filename" id="filename"></div>
+          <button type="button" id="reveal">📂 Afficher dans le dossier</button>
+        </div>
+        <div id="dlErr" class="err" hidden></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="card" id="aboutPanel" hidden>
+    <div class="row between">
+      <h2>VideoCutter <span id="appVer"></span> — licences</h2>
+      <button type="button" id="aboutClose" class="small">Fermer</button>
+    </div>
+    <p class="note">VideoCutter est un logiciel libre : tu peux le redistribuer et le modifier selon les termes de la
+      <b>licence publique générale GNU (GPL), version 3 ou ultérieure</b>.</p>
+    <p class="note mt">Il est fourni <b>sans aucune garantie</b>, dans la mesure permise par la loi.
+      Le texte complet de la licence est installé avec l'appli (fichier <code>LICENSE.txt</code>).</p>
+    <p class="note mt">Composants inclus : <b>yt-dlp</b> (Unlicense), <b>FFmpeg</b> (GPL v3), <b>Electron</b> (MIT).
+      Détails et liens vers leur code source : fichier <code>THIRD_PARTY_NOTICES.md</code>, installé avec l'appli.</p>
+    <p class="note mt">Ne télécharge que des contenus que tu as le droit de télécharger, et respecte les conditions des sites.</p>
+    <button type="button" id="openLicenses" class="small mt">📂 Ouvrir le dossier des licences</button>
+  </section>
+
+  <footer>
+    <div class="row between">
+      <span>Dossier : <a href="#" id="folderLink"></a> · <a href="#" id="changeFolder">changer</a> · <a href="#" id="loginLink">🔑 Connexions</a></span>
+      <span>yt-dlp <span id="ytVer">…</span> · <a href="#" id="updateLink">mettre à jour</a> · <a href="#" id="termsLink">Conditions</a> · <a href="#" id="aboutLink">Licences</a></span>
+    </div>
+  </footer>
+</main>
+</body>
+</html>

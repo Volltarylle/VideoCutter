@@ -1,0 +1,72 @@
+{
+  "name": "videocutter",
+  "productName": "VideoCutter",
+  "version": "1.4.0",
+  "description": "Télécharger un extrait précis d'une vidéo (YouTube, X, Instagram, Dailymotion…), en vidéo ou en musique.",
+  "author": "Léo",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "binaries": "node build/fetch-binaries.js",
+    "icon": "electron build/render-icon.js",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "fr.leo.decoupeur-youtube",
+    "productName": "VideoCutter",
+    "executableName": "VideoCutter",
+    "copyright": "Léo",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor",
+        "to": "bin",
+        "filter": ["**/*"]
+      },
+      { "from": "LICENSE", "to": "LICENSE.txt" },
+      { "from": "THIRD_PARTY_NOTICES.md", "to": "THIRD_PARTY_NOTICES.md" }
+    ],
+    "asar": true,
+    "compression": "maximum",
+    "electronFuses": {
+      "runAsNode": true,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
+    "electronLanguages": ["fr", "en-US"],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "build/icon.png",
+      "artifactName": "VideoCutter-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "VideoCutter",
+      "uninstallDisplayName": "VideoCutter",
+      "deleteAppDataOnUninstall": true,
+      "language": "1036"
+    }
+  }
+}

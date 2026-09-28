@@ -1,0 +1,10 @@
+# Dépendances et fichiers régénérables
+node_modules/
+vendor/
+dist/
+.cache/
+
+# Divers
+*.log
+.DS_Store
+Thumbs.db
