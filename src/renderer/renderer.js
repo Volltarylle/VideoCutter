@@ -64,6 +64,8 @@ const player = {
   seek(t) { if (this.kind === "youtube") yt.seek(t); else if (this.kind === "media") media.currentTime = t; },
   play() { if (this.kind === "youtube") yt.play(); else if (this.kind === "media") media.play().catch(() => {}); },
   pause() { if (this.kind === "youtube") yt.pause(); else if (this.kind === "media") media.pause(); },
+  playing() { return this.kind === "youtube" ? yt.playing : this.kind === "media" ? !media.paused : false; },
+  toggle() { this.playing() ? this.pause() : this.play(); },
 };
 
 function showStill(j, message) {
@@ -167,9 +169,13 @@ $("urlForm").addEventListener("submit", async e => {
     if (!j.hasVideo && mode === "video") audioBtn.click();
     if (!j.hasAudio && mode === "audio") videoBtn.click();
 
+    segments = []; renderSegments();
+    cropPos = 0.5;
     $("editor").hidden = false;
     if (!currentJob) $("progress").hidden = true;
     loadPlayer(j);
+    updateCropUI();
+    lastClip = j.url; $("clipSuggest").hidden = true;
   } catch {
     showLoadError("Erreur inattendue. Réessaie.");
   } finally {
@@ -191,7 +197,13 @@ function setRange(s, e, source) {
   $("range").style.left = (s / d * 100) + "%";
   $("range").style.width = ((e - s) / d * 100) + "%";
   $("clipLen").textContent = fmt(e - s);
-  $("dlBtn").textContent = (s < 0.05 && e > d - 0.05) ? "Télécharger la vidéo entière" : "Télécharger l'extrait";
+  updateDlLabel();
+}
+function updateDlLabel() {
+  if (!info) return;
+  if (segments.length) { $("dlBtn").textContent = segments.length > 1 ? `Télécharger les ${segments.length} extraits` : "Télécharger l'extrait de la liste"; return; }
+  const d = info.duration;
+  $("dlBtn").textContent = !d || (info.start < 0.05 && info.end > d - 0.05) ? "Télécharger la vidéo entière" : "Télécharger l'extrait";
 }
 $("startR").addEventListener("input", () => { setRange(+$("startR").value, info.end, "start"); player.seek(info.start); });
 $("endR").addEventListener("input", () => { setRange(info.start, +$("endR").value, "end"); player.seek(info.end); });
@@ -217,7 +229,108 @@ $("modeSeg").addEventListener("click", e => {
   for (const x of $("modeSeg").children) x.classList.toggle("on", x === b);
   $("quality").hidden = $("vFormat").hidden = mode !== "video";
   $("aFormat").hidden = mode !== "audio";
+  $("cropRow").hidden = mode !== "video";
+  updateCropUI();
 });
+
+// ---------------------------------------------------------------------------
+// Recadrage 9:16 / 1:1 : cadre déplaçable sur l'aperçu
+// ---------------------------------------------------------------------------
+let crop = "", cropPos = 0.5;
+const CROP_RATIOS = { "9:16": 9 / 16, "1:1": 1 };
+$("cropSeg").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  crop = b.dataset.crop;
+  for (const x of $("cropSeg").children) x.classList.toggle("on", x === b);
+  updateCropUI();
+});
+
+// Rectangle occupé par l'image dans le lecteur (l'image est centrée, bandes noires autour)
+function videoRect() {
+  const box = $("player").getBoundingClientRect();
+  const a = info?.width && info?.height ? info.width / info.height : 16 / 9;
+  let w = box.width, h = box.width / a;
+  if (h > box.height) { h = box.height; w = h * a; }
+  return { left: (box.width - w) / 2, top: (box.height - h) / 2, w, h };
+}
+function updateCropUI() {
+  const active = !!crop && mode === "video" && !!info;
+  $("cropNote").hidden = !active;
+  $("cropLayer").hidden = !active;
+  if (!active) return;
+  const r = CROP_RATIOS[crop], v = videoRect();
+  const cw = Math.min(v.w, v.h * r), ch = Math.min(v.h, v.w / r);
+  const x = v.left + (v.w - cw) * cropPos, y = v.top + (v.h - ch) * cropPos;
+  const f = $("cropFrame").style;
+  f.width = cw + "px"; f.height = ch + "px"; f.left = x + "px"; f.top = y + "px";
+  // Deux bandes sombres sur les parties coupées (à gauche/droite, ou en haut/en bas)
+  const a = $("shadeA").style, b = $("shadeB").style;
+  if (v.w - cw >= v.h - ch) {
+    Object.assign(a, { left: v.left + "px", top: v.top + "px", width: x - v.left + "px", height: v.h + "px" });
+    Object.assign(b, { left: x + cw + "px", top: v.top + "px", width: v.left + v.w - x - cw + "px", height: v.h + "px" });
+  } else {
+    Object.assign(a, { left: v.left + "px", top: v.top + "px", width: v.w + "px", height: y - v.top + "px" });
+    Object.assign(b, { left: v.left + "px", top: y + ch + "px", width: v.w + "px", height: v.top + v.h - y - ch + "px" });
+  }
+  $("cropLabel").textContent = crop;
+}
+new ResizeObserver(() => updateCropUI()).observe($("player"));
+{
+  let drag = null;
+  $("cropGrip").addEventListener("pointerdown", e => {
+    const v = videoRect(), r = CROP_RATIOS[crop];
+    const cw = Math.min(v.w, v.h * r), ch = Math.min(v.h, v.w / r);
+    // Axe de déplacement : horizontal si la vidéo est plus large que le cadre, sinon vertical
+    const horizontal = v.w - cw >= v.h - ch;
+    drag = { x: e.clientX, y: e.clientY, pos: cropPos, span: horizontal ? v.w - cw : v.h - ch, horizontal };
+    $("cropGrip").setPointerCapture(e.pointerId);
+  });
+  $("cropGrip").addEventListener("pointermove", e => {
+    if (!drag || drag.span <= 0) return;
+    const delta = drag.horizontal ? e.clientX - drag.x : e.clientY - drag.y;
+    cropPos = Math.min(1, Math.max(0, drag.pos + delta / drag.span));
+    updateCropUI();
+  });
+  const end = () => { drag = null; };
+  $("cropGrip").addEventListener("pointerup", end);
+  $("cropGrip").addEventListener("pointercancel", end);
+}
+
+// ---------------------------------------------------------------------------
+// Plusieurs extraits
+// ---------------------------------------------------------------------------
+let segments = [];
+function renderSegments() {
+  $("segBox").hidden = !segments.length;
+  $("segCount").textContent = segments.length;
+  $("segList").replaceChildren(...segments.map((s, i) => {
+    const li = document.createElement("li");
+    const row = document.createElement("div");
+    const t = document.createElement("span");
+    t.className = "t"; t.title = "Revoir / modifier ce passage";
+    t.textContent = `${fmt(s.start)} → ${fmt(s.end)}  (${fmt(s.end - s.start)})`;
+    t.onclick = () => { setRange(s.start, s.end); player.seek(s.start); };
+    const actions = document.createElement("span"); actions.className = "row";
+    const play = document.createElement("button"); play.type = "button"; play.className = "small"; play.textContent = "▶";
+    play.title = "Écouter"; play.onclick = () => { player.seek(s.start); player.play(); previewStop = s.end; };
+    const del = document.createElement("button"); del.type = "button"; del.className = "small"; del.textContent = "✕";
+    del.title = "Retirer"; del.onclick = () => { segments.splice(i, 1); renderSegments(); };
+    actions.append(play, del);
+    row.append(t, actions); li.append(row);
+    return li;
+  }));
+  updateDlLabel();
+}
+function addSegment() {
+  if (!info?.duration) return;
+  if (segments.length >= 20) return;
+  if (segments.some(s => Math.abs(s.start - info.start) < 0.05 && Math.abs(s.end - info.end) < 0.05)) return;
+  segments.push({ start: info.start, end: info.end });
+  segments.sort((a, b) => a.start - b.start);
+  renderSegments();
+}
+$("addSeg").onclick = addSegment;
+$("segClear").onclick = () => { segments = []; renderSegments(); };
 
 // ---------------------------------------------------------------------------
 // Téléchargement
@@ -237,6 +350,8 @@ $("dlBtn").onclick = async () => {
   const r = await api.download({
     token: info.token, start: info.start, end: info.end, mode,
     format: mode === "audio" ? $("aFormat").value : $("vFormat").value, quality: $("quality").value,
+    segments, merge: document.querySelector("input[name=merge]:checked")?.value === "1",
+    crop: mode === "video" ? crop : "", cropPos,
   }).catch(() => ({ error: "Erreur inattendue." }));
   if (r.error) { finish(); $("bar").classList.remove("indet"); $("dlErr").textContent = r.error; $("dlErr").hidden = false; return; }
   currentJob = r.id;
@@ -251,7 +366,9 @@ api.onProgress(p => {
   finish();
   if (p.status === "done") {
     doneJob = p.id;
-    $("filename").textContent = p.file || "";
+    const files = p.files || [];
+    $("doneText").textContent = files.length > 1 ? `✓ ${files.length} fichiers enregistrés` : "✓ Fichier enregistré";
+    $("filename").textContent = files.join("\n");
     $("result").hidden = false;
   } else if (p.status === "cancelled") {
     $("bar").classList.remove("indet"); $("bar").firstElementChild.style.width = "0";
@@ -355,6 +472,140 @@ $("termsLink").onclick = e => { e.preventDefault(); showTerms(false); };
 // Échap ne ferme la fenêtre que si les conditions sont déjà acceptées
 document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("terms").hidden && !$("termsClose").hidden) $("terms").hidden = true; });
 api.termsState().then(ok => { if (!ok) showTerms(true); });
+
+// ---------------------------------------------------------------------------
+// Raccourcis clavier (comme dans un logiciel de montage)
+// ---------------------------------------------------------------------------
+document.addEventListener("keydown", e => {
+  if (!info || $("editor").hidden || !$("terms").hidden) return;
+  const t = e.target;
+  if (t.closest?.("input, select, textarea, [contenteditable]") || e.ctrlKey || e.altKey || e.metaKey) return;
+  const hasCut = !!info.duration;
+  const step = e.shiftKey ? 0.1 : 1;
+  switch (e.key.toLowerCase()) {
+    case " ": player.toggle(); break;
+    case "i": if (hasCut) setRange(player.now(), info.end, "start"); break;
+    case "o": if (hasCut) setRange(info.start, player.now(), "end"); break;
+    case "p": if (hasCut) $("preview").click(); break;
+    case "a": if (hasCut) addSegment(); break;
+    case "arrowleft": player.seek(Math.max(0, player.now() - step)); break;
+    case "arrowright": player.seek(Math.min(info.duration || Infinity, player.now() + step)); break;
+    default: return;
+  }
+  e.preventDefault();
+});
+
+// ---------------------------------------------------------------------------
+// Lien dans le presse-papiers : proposé quand l'appli reprend la main
+// ---------------------------------------------------------------------------
+let lastClip = null;
+async function checkClipboard() {
+  if (!$("terms").hidden) return;
+  const link = await api.clipboardLink().catch(() => null);
+  if (!link || link === lastClip || link === info?.url || link === $("url").value.trim()) return;
+  lastClip = link;
+  $("clipText").textContent = link.length > 90 ? link.slice(0, 87) + "…" : link;
+  $("clipSuggest").dataset.link = link;
+  $("clipSuggest").hidden = false;
+}
+$("clipUse").onclick = () => {
+  $("url").value = $("clipSuggest").dataset.link || "";
+  $("clipSuggest").hidden = true;
+  $("urlForm").requestSubmit();
+};
+$("clipDismiss").onclick = () => { $("clipSuggest").hidden = true; };
+window.addEventListener("focus", checkClipboard);
+setTimeout(checkClipboard, 600);
+
+// ---------------------------------------------------------------------------
+// Glisser-déposer d'un lien (depuis la barre d'adresse ou une page web)
+// ---------------------------------------------------------------------------
+{
+  let depth = 0;
+  const isLink = e => [...(e.dataTransfer?.types || [])].some(t => t === "text/uri-list" || t === "text/plain");
+  window.addEventListener("dragenter", e => { if (!isLink(e)) return; depth++; $("dropHint").hidden = false; e.preventDefault(); });
+  window.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; $("dropHint").hidden = true; } });
+  window.addEventListener("dragover", e => e.preventDefault());
+  window.addEventListener("drop", e => {
+    e.preventDefault();
+    depth = 0; $("dropHint").hidden = true;
+    if (!$("terms").hidden) return;
+    const raw = (e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain") || "")
+      .split(/\r?\n/).map(s => s.trim()).find(s => s && !s.startsWith("#"));
+    if (!raw) return;
+    $("url").value = raw;
+    $("urlForm").requestSubmit();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Historique
+// ---------------------------------------------------------------------------
+async function refreshHistory() {
+  const list = await api.historyList();
+  const items = list.map(h => {
+    const li = document.createElement("li");
+    const info2 = document.createElement("div");
+    const title = document.createElement("div"); title.className = "h-title"; title.textContent = h.title;
+    const meta = document.createElement("div"); meta.className = "h-meta";
+    const date = new Date(h.date).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
+    const what = [h.format.toUpperCase(), h.crop, h.segments > 1 ? `${h.segments} extraits${h.merged ? " recollés" : ""}` : ""].filter(Boolean).join(" · ");
+    meta.textContent = [h.site, date, what, h.exists ? "" : "fichier introuvable"].filter(Boolean).join(" · ");
+    info2.append(title, meta);
+    const actions = document.createElement("div"); actions.className = "h-actions";
+    const open = document.createElement("button"); open.type = "button"; open.className = "small"; open.textContent = "📂";
+    open.title = "Afficher dans le dossier"; open.disabled = !h.exists; open.onclick = () => api.historyReveal(h.id);
+    const again = document.createElement("button"); again.type = "button"; again.className = "small"; again.textContent = "↻";
+    again.title = "Recharger cette vidéo"; again.disabled = !h.url;
+    again.onclick = () => { $("url").value = h.url; $("historyPanel").hidden = true; $("urlForm").requestSubmit(); window.scrollTo({ top: 0, behavior: "smooth" }); };
+    const del = document.createElement("button"); del.type = "button"; del.className = "small"; del.textContent = "✕";
+    del.title = "Retirer de l'historique"; del.onclick = async () => { await api.historyRemove(h.id); refreshHistory(); };
+    actions.append(open, again, del);
+    li.append(info2, actions);
+    return li;
+  });
+  if (!items.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = "Aucun téléchargement pour l'instant."; items.push(li); }
+  $("historyList").replaceChildren(...items);
+  $("historyClear").hidden = !list.length;
+}
+$("historyLink").onclick = e => {
+  e.preventDefault();
+  $("historyPanel").hidden = !$("historyPanel").hidden;
+  if (!$("historyPanel").hidden) { refreshHistory(); $("historyPanel").scrollIntoView({ behavior: "smooth" }); }
+};
+$("historyClose").onclick = () => { $("historyPanel").hidden = true; };
+$("historyClear").onclick = async () => {
+  if (!confirm("Effacer tout l'historique ? (les fichiers téléchargés ne sont pas supprimés)")) return;
+  await api.historyClear(); refreshHistory();
+};
+api.onHistoryChanged(() => { if (!$("historyPanel").hidden) refreshHistory(); });
+
+// ---------------------------------------------------------------------------
+// Mise à jour de l'appli
+// ---------------------------------------------------------------------------
+api.onAppUpdate(s => {
+  const banner = $("updBanner"), btn = $("updBtn");
+  if (s.state === "available") {
+    $("updText").textContent = `🎉 VideoCutter ${s.version} est disponible.`;
+    btn.textContent = "Mettre à jour"; btn.disabled = false; btn.hidden = false;
+    btn.onclick = () => { btn.disabled = true; $("updText").textContent = "Téléchargement de la mise à jour…"; api.appUpdateDownload(); };
+    banner.hidden = false;
+  } else if (s.state === "downloading") {
+    $("updText").textContent = `Téléchargement de la mise à jour… ${s.percent} %`;
+    btn.hidden = true; banner.hidden = false;
+  } else if (s.state === "ready") {
+    $("updText").textContent = `✓ VideoCutter ${s.version} est prêt à être installé.`;
+    btn.textContent = "Redémarrer et installer"; btn.disabled = false; btn.hidden = false;
+    btn.onclick = () => {
+      if (currentJob && !confirm("Un téléchargement est en cours : il sera annulé. Continuer ?")) return;
+      api.appUpdateInstall();
+    };
+    banner.hidden = false;
+  } else if (s.state === "error" && !banner.hidden) {
+    $("updText").textContent = "La mise à jour n'a pas pu être téléchargée. Elle sera proposée à nouveau au prochain lancement.";
+    btn.hidden = true;
+  }
+});
 // Après la fermeture d'une fenêtre de connexion : mise à jour de la liste, et nouvel essai du lien en échec
 api.onLoginChanged(() => {
   if (!$("loginPanel").hidden) refreshLogins();

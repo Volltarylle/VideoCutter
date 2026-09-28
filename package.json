@@ -1,7 +1,7 @@
 {
   "name": "videocutter",
   "productName": "VideoCutter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Télécharger un extrait précis d'une vidéo (YouTube, X, Instagram, Dailymotion…), en vidéo ou en musique.",
   "author": "Léo",
   "license": "GPL-3.0-or-later",
@@ -11,7 +11,10 @@
     "start": "electron .",
     "binaries": "node build/fetch-binaries.js",
     "icon": "electron build/render-icon.js",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.0"
   },
   "devDependencies": {
     "electron": "^44.4.5",
@@ -22,6 +25,7 @@
     "productName": "VideoCutter",
     "executableName": "VideoCutter",
     "copyright": "Léo",
+    "publish": [{ "provider": "github", "owner": "Volltarylle", "repo": "VideoCutter", "releaseType": "release" }],
     "directories": {
       "output": "dist",
       "buildResources": "build"

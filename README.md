@@ -32,7 +32,9 @@ Autres fonctions : annulation d'un téléchargement, choix du dossier de destina
 ## 🔒 Confidentialité et sécurité
 
 - **Aucun serveur** : VideoCutter n'envoie rien à personne. Pas de compte, pas de statistiques, pas de publicité, pas de pistage.
-- L'appli ne communique qu'avec **le site de la vidéo** que tu télécharges, et avec **GitHub** pour mettre à jour yt-dlp.
+- L'appli ne communique qu'avec **le site de la vidéo** que tu télécharges, et avec **GitHub** pour vérifier ses mises à jour (celles de l'appli et de yt-dlp). Une mise à jour n'est téléchargée qu'après ton accord.
+- Le presse-papiers n'est lu que lorsque la fenêtre de l'appli reprend la main, et seulement pour y repérer un lien web ; rien d'autre n'en est lu ni conservé.
+- L'historique des téléchargements est enregistré uniquement sur ton PC et peut être effacé à tout moment.
 - **Connexions aux sites** : elles se font dans une fenêtre de l'appli séparée de ton navigateur. Elles restent **sur ton PC**, chiffrées par Windows, et ne sont utilisées que si un site l'exige. Tes mots de passe sont tapés sur la page officielle du site ; l'appli ne les enregistre pas.
 - La fenêtre de l'appli n'a aucun accès direct au système ; tous les liens, temps et formats sont vérifiés avant d'être transmis aux outils de téléchargement.
 - Les outils inclus (yt-dlp, FFmpeg) sont vérifiés par empreinte SHA-256 lors de la fabrication de l'installateur et à chaque mise à jour.

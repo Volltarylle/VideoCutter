@@ -2,7 +2,7 @@
 // Toute la logique de téléchargement tourne ici ; la fenêtre ne communique
 // qu'à travers quelques appels IPC strictement validés (voir preload.js).
 
-const { app, BrowserWindow, ipcMain, shell, session, protocol, dialog, Menu, net } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, session, protocol, dialog, Menu, net, clipboard } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn, execFile } = require("child_process");
@@ -61,6 +61,33 @@ const CHILD_ENV = {
 // ---------------------------------------------------------------------------
 // Réglages (dossier de destination)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Historique des téléchargements (fichier local uniquement, effaçable depuis l'appli)
+// ---------------------------------------------------------------------------
+const HISTORY_FILE = path.join(app.getPath("userData"), "history.json");
+const MAX_HISTORY = 100;
+let history = null;
+function loadHistory() {
+  if (history) return history;
+  try { history = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf8")); if (!Array.isArray(history)) history = []; }
+  catch { history = []; }
+  return history;
+}
+function saveHistory() { try { fs.writeFileSync(HISTORY_FILE, JSON.stringify(history)); } catch {} }
+function addHistory(e) {
+  loadHistory().unshift({ id: require("crypto").randomUUID(), date: new Date().toISOString(), ...e });
+  history = history.slice(0, MAX_HISTORY);
+  saveHistory();
+  mainWindow?.webContents.send("history-changed");
+}
+function historyView() {
+  return loadHistory().map(h => ({
+    id: h.id, date: h.date, title: String(h.title || ""), site: String(h.site || ""), url: String(h.url || ""),
+    format: String(h.format || ""), crop: h.crop || null, segments: h.segments || 1, merged: !!h.merged,
+    count: (h.files || []).length, exists: (h.files || []).some(f => typeof f === "string" && fs.existsSync(f)),
+  }));
+}
 
 const isDir = p => { try { return typeof p === "string" && path.isAbsolute(p) && fs.statSync(p).isDirectory(); } catch { return false; } };
 
@@ -427,7 +454,10 @@ async function getInfo(url) {
   if (!duration && !j.is_live) duration = await probeDuration(preview);
   const heights = [...new Set(formats.filter(f => f.vcodec !== "none" && f.height > 0).map(f => Math.round(f.height)))].sort((a, b) => b - a);
   const token = require("crypto").randomUUID();
+  const title = String(j.title || j.id || "Vidéo").slice(0, 300);
+  const site = SITE_NAMES[j.extractor_key] || String(j.extractor_key || j.extractor || "").replace(/[^\w .-]/g, "");
   const entry = {
+    title, site,
     url: httpUrl(j.webpage_url) || link, duration, hasVideo, hasAudio, preview, heights, useCookies,
     thumb: httpUrl(j.thumbnail) ? { url: httpUrl(j.thumbnail), headers: {} } : null,
   };
@@ -435,8 +465,8 @@ async function getInfo(url) {
   while (infos.size > MAX_INFOS) infos.delete(infos.keys().next().value);
 
   return {
-    token, title: String(j.title || j.id || "Vidéo"), channel: String(j.channel || j.uploader || ""),
-    site: SITE_NAMES[j.extractor_key] || String(j.extractor_key || j.extractor || "").replace(/[^\w .-]/g, ""),
+    token, title, channel: String(j.channel || j.uploader || ""), site, url: entry.url,
+    width: finite(j.width, 0) || null, height: finite(j.height, 0) || null,
     duration, isLive: !!j.is_live, hasVideo, hasAudio, heights, loggedIn: useCookies,
     youtubeId: isYouTube ? j.id : null, preview: !!entry.preview, thumb: !!entry.thumb,
   };
@@ -453,6 +483,10 @@ const stamp = sec => {
   const s = Math.floor(sec), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
   return (h ? h + "h" : "") + String(m).padStart(2, "0") + "m" + String(r).padStart(2, "0") + "s";
 };
+
+const CROPS = { "9:16": 9 / 16, "1:1": 1 };
+const CROP_TAGS = { "9:16": "9x16", "1:1": "1x1" };
+const MAX_SEGMENTS = 20;
 
 function buildArgs({ url, start, end, duration, mode, format, quality, cookieFile }, tempDir) {
   const cut = start > 0.05 || end < duration - 0.05;
@@ -503,7 +537,68 @@ function sendProgress(job, force) {
   if (!force && now - job.lastSent < 100) return; // max ~10 mises à jour/s
   job.lastSent = now;
   const { id, status, percent, line, error } = job;
-  mainWindow?.webContents.send("progress", { id, status, percent, line, error, file: job.file ? path.basename(job.file) : null });
+  mainWindow?.webContents.send("progress", { id, status, percent, line, error, files: (job.files || []).map(f => path.basename(f)) });
+}
+
+// Lance un programme (yt-dlp ou ffmpeg) pour une tâche, ligne par ligne, annulable.
+function runTool(job, exe, args, cwd, onLine) {
+  return new Promise(resolve => {
+    const proc = spawn(exe, args, { env: CHILD_ENV, windowsHide: true, cwd });
+    job.proc = proc;
+    const splitter = () => { let buf = ""; return d => { buf += d.toString("utf8"); const ls = buf.split(/\r?\n|\r/); buf = ls.pop(); ls.forEach(l => l.trim() && onLine(l.trim())); }; };
+    proc.stdout.on("data", splitter());
+    proc.stderr.on("data", splitter());
+    proc.on("error", e => onLine("ERROR: " + e.message));
+    proc.on("close", code => { job.proc = null; resolve(code); });
+  });
+}
+const ffTime = line => { const m = line.match(/time=(\d+):(\d+):([\d.]+)/); return m ? +m[1] * 3600 + +m[2] * 60 + +m[3] : null; };
+
+// Réglages d'encodage quand FFmpeg doit réencoder (recadrage, ou assemblage impossible sans réencodage)
+function videoCodecArgs(ext) {
+  if (ext === ".webm") return ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1"];
+  if (ext === ".avi") return ["-c:v", "mpeg4", "-q:v", "3"];
+  return ["-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-pix_fmt", "yuv420p"];
+}
+function audioCodecArgs(ext) {
+  return {
+    ".mp3": ["-c:a", "libmp3lame", "-q:a", "2"], ".wav": ["-c:a", "pcm_s16le"], ".flac": ["-c:a", "flac"],
+    ".m4a": ["-c:a", "aac", "-b:a", "256k"], ".ogg": ["-c:a", "libvorbis", "-q:a", "6"], ".opus": ["-c:a", "libopus", "-b:a", "160k"],
+    ".webm": ["-c:a", "libopus", "-b:a", "160k"], ".avi": ["-c:a", "libmp3lame", "-q:a", "2"],
+  }[ext] || ["-c:a", "aac", "-b:a", "192k"];
+}
+const FFMPEG = () => path.join(FFMPEG_DIR, "ffmpeg.exe");
+
+// Recadre une vidéo au format demandé (9:16 ou 1:1), à la position choisie (0 = gauche/haut, 1 = droite/bas).
+async function cropFile(job, src, cropKey, pos, report) {
+  const r = CROPS[cropKey], ext = path.extname(src);
+  const out = src.slice(0, -ext.length) + ` ${CROP_TAGS[cropKey]}` + ext;
+  const vf = `crop=w=trunc(min(iw\\,ih*${r})/2)*2:h=trunc(min(ih\\,iw/${r})/2)*2:x=(iw-ow)*${pos.toFixed(4)}:y=(ih-oh)*${pos.toFixed(4)}`;
+  const args = ["-hide_banner", "-nostdin", "-y", "-i", src, "-vf", vf, ...videoCodecArgs(ext), "-c:a", "copy", "-map_metadata", "0"];
+  if (ext === ".mp4" || ext === ".mov") args.push("-movflags", "+faststart");
+  args.push(out);
+  const code = await runTool(job, FFMPEG(), args, path.dirname(src), line => { const t = ffTime(line); if (t !== null) report(t); });
+  if (code !== 0 || !fs.existsSync(out)) throw new Error("recadrage impossible");
+  fs.rmSync(src, { force: true });
+  return out;
+}
+
+// Recolle plusieurs extraits en un seul fichier (sans réencodage si possible).
+async function concatFiles(job, files, out, report) {
+  const list = path.join(path.dirname(out), "liste.txt");
+  fs.writeFileSync(list, files.map(f => `file '${f.replace(/'/g, "'\\''")}'`).join("\n"));
+  const ext = path.extname(out);
+  const base = ["-hide_banner", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list];
+  const onLine = line => { const t = ffTime(line); if (t !== null) report(t); };
+  let code = await runTool(job, FFMPEG(), [...base, "-c", "copy", out], path.dirname(out), onLine);
+  if ((code !== 0 || !fs.existsSync(out)) && job.status === "running") {
+    fs.rmSync(out, { force: true });
+    const audioOnly = [".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"].includes(ext);
+    code = await runTool(job, FFMPEG(), [...base, ...(audioOnly ? [] : videoCodecArgs(ext)), ...audioCodecArgs(ext), out], path.dirname(out), onLine);
+  }
+  if (code !== 0 || !fs.existsSync(out)) throw new Error("assemblage impossible");
+  for (const f of files) fs.rmSync(f, { force: true });
+  return out;
 }
 
 async function startDownload(opts) {
@@ -513,10 +608,17 @@ async function startDownload(opts) {
   if (!info) return { error: "Recharge le lien avant de télécharger." };
   const known = info.duration;
   const duration = known || 1;
-  let start = known ? Math.max(0, finite(opts.start, 0)) : 0;
-  let end = known ? Math.min(duration, finite(opts.end, duration)) : duration;
-  if (!(end > start)) return { error: "La fin doit être après le début." };
+  const raw = known && Array.isArray(opts.segments) && opts.segments.length ? opts.segments : [{ start: opts.start, end: opts.end }];
+  if (raw.length > MAX_SEGMENTS) return { error: `${MAX_SEGMENTS} extraits maximum à la fois.` };
+  const segments = raw.map(s => ({
+    start: known ? Math.max(0, finite(s?.start, 0)) : 0,
+    end: known ? Math.min(duration, finite(s?.end, duration)) : duration,
+  }));
+  if (segments.some(s => !(s.end > s.start))) return { error: "Pour chaque extrait, la fin doit être après le début." };
   const mode = opts.mode === "audio" ? "audio" : "video";
+  const merge = !!opts.merge && segments.length > 1;
+  const crop = mode === "video" && CROPS[opts.crop] ? opts.crop : null;
+  const cropPos = Math.min(1, Math.max(0, finite(opts.cropPos, 0.5)));
   if (mode === "video" && !info.hasVideo) return { error: "Ce lien ne contient que du son : choisis « Musique »." };
   if (mode === "audio" && !info.hasAudio) return { error: "Cette vidéo n'a pas de son : impossible d'en faire un fichier audio." };
   const format = mode === "audio" ? (AUDIO_FORMATS[opts.format] ? opts.format : "mp3") : (VIDEO_FORMATS.has(opts.format) ? opts.format : "mp4");
@@ -529,52 +631,78 @@ async function startDownload(opts) {
   const jobId = String(++jobCounter);
   const tempDir = path.join(TEMP_ROOT, "job-" + jobId + "-" + Date.now());
   fs.mkdirSync(tempDir, { recursive: true });
-  const cookieFile = info.useCookies ? await cookieFileFor(info.url) : null;
-  const { args, cut } = buildArgs({ url: info.url, start, end, duration, mode, format, quality, cookieFile }, tempDir);
-
-  const job = { id: jobId, status: "running", percent: null, line: "Préparation…", file: null, error: null, lastSent: 0, tempDir, proc: null };
+  const job = { id: jobId, status: "running", percent: null, line: "Préparation…", files: [], error: null, lastSent: 0, tempDir, proc: null };
   jobs.set(jobId, job);
+  runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos }).catch(() => {});
+  return { id: jobId };
+}
 
-  const proc = spawn(YTDLP, args, { env: CHILD_ENV, windowsHide: true, cwd: tempDir });
-  job.proc = proc;
-  const errLines = [];
-  const clipLen = end - start;
-
-  const onLine = raw => {
-    const line = raw.trim();
-    if (!line) return;
-    let m;
-    if ((m = line.match(/^\[download\]\s+([\d.]+)%/))) { job.percent = parseFloat(m[1]); job.line = "Téléchargement…"; }
-    else if (/^[A-Za-z]:\\/.test(line)) job.file = line;
-    else if (/^\[(ExtractAudio|Merger|VideoConvertor|VideoRemuxer|FixupM\w+|EmbedThumbnail|Metadata)\]/.test(line)) job.line = "Finalisation du fichier…";
-    else if ((m = line.match(/time=(\d+):(\d+):([\d.]+)/))) {
-      if (cut) job.percent = Math.min(99, ((+m[1] * 3600 + +m[2] * 60 + +m[3]) / clipLen) * 100);
-      job.line = "Découpe et téléchargement…";
+// Déroulé d'une tâche : chaque extrait (téléchargement + recadrage éventuel), assemblage éventuel, rangement.
+async function runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos }) {
+  const n = segments.length, tempDir = job.tempDir;
+  // Répartition de la barre de progression : téléchargement 70 %, recadrage 25 %, assemblage 5 % (ajusté selon les étapes)
+  const wCrop = crop ? 0.3 : 0, wMerge = merge ? 0.05 : 0, wDl = 1 - wCrop - wMerge;
+  const setP = (frac, line) => { job.percent = Math.min(99.5, Math.max(0, frac * 100)); if (line) job.line = line; sendProgress(job); };
+  const prefix = i => (n > 1 ? `Extrait ${i + 1}/${n} — ` : "");
+  let cookieFile = null;
+  const produced = [];
+  try {
+    cookieFile = info.useCookies ? await cookieFileFor(info.url) : null;
+    for (let i = 0; i < n && job.status === "running"; i++) {
+      const seg = segments[i], segLen = seg.end - seg.start;
+      const segDir = path.join(tempDir, "seg-" + i);
+      fs.mkdirSync(segDir, { recursive: true });
+      const { args, cut } = buildArgs({ url: info.url, start: seg.start, end: seg.end, duration, mode, format, quality, cookieFile }, segDir);
+      const errLines = [];
+      let file = null;
+      const base = i / n;
+      setP(base, prefix(i) + "Préparation…");
+      const code = await runTool(job, YTDLP, args, segDir, line => {
+        let m;
+        if ((m = line.match(/^\[download\]\s+([\d.]+)%/))) setP((base + parseFloat(m[1]) / 100 / n) * wDl, prefix(i) + "Téléchargement…");
+        else if (/^[A-Za-z]:\\/.test(line)) file = line;
+        else if (/^\[(ExtractAudio|Merger|VideoConvertor|VideoRemuxer|FixupM\w+|EmbedThumbnail|Metadata)\]/.test(line)) setP(((i + 1) / n) * wDl, prefix(i) + "Finalisation…");
+        else if (ffTime(line) !== null && cut) setP((base + Math.min(1, ffTime(line) / segLen) / n) * wDl, prefix(i) + "Découpe et téléchargement…");
+        else if (line.includes("ERROR")) errLines.push(line);
+      });
+      if (job.status !== "running") break;
+      const ok = code === 0 && file && path.dirname(path.resolve(file)) === path.resolve(segDir) && fs.existsSync(file);
+      if (!ok) throw Object.assign(new Error(cleanError(errLines.join("\n")) || `Échec (code ${code}).`), { user: true });
+      if (crop) {
+        const cBase = wDl + (i / n) * wCrop;
+        setP(cBase, prefix(i) + "Recadrage " + crop + "…");
+        file = await cropFile(job, file, crop, cropPos, t => setP(cBase + Math.min(1, t / segLen) / n * wCrop));
+      }
+      produced.push(file);
     }
-    else if (line.includes("ERROR")) errLines.push(line);
-    else return;
-    sendProgress(job);
-  };
-  const splitter = () => { let buf = ""; return d => { buf += d.toString("utf8"); const ls = buf.split(/\r?\n|\r/); buf = ls.pop(); ls.forEach(onLine); }; };
-  proc.stdout.on("data", splitter());
-  proc.stderr.on("data", splitter());
-  proc.on("error", e => errLines.push("ERROR: " + e.message));
-  proc.on("close", async code => {
-    job.proc = null;
+    if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
+
+    let results = produced;
+    if (merge) {
+      setP(1 - wMerge, "Assemblage des extraits…");
+      const ext = path.extname(produced[0]);
+      const title = path.basename(produced[0], ext).replace(/ \[[^\]]*\]( \dx\d+)?$/, "");
+      const tag = crop ? ` ${CROP_TAGS[crop]}` : "";
+      const total = segments.reduce((a, s) => a + (s.end - s.start), 0);
+      const out = path.join(tempDir, `${title} [${n} extraits]${tag}${ext}`);
+      results = [await concatFiles(job, produced, out, t => setP(1 - wMerge + Math.min(1, t / total) * wMerge))];
+    }
+    if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
+
+    try {
+      for (const f of results) job.files.push(await finalizeFile(f, settings.downloadDir));
+    } catch (e) { throw Object.assign(new Error("Impossible d'enregistrer le fichier dans le dossier choisi (" + e.code + ")."), { user: true }); }
+    job.status = "done"; job.percent = 100; job.line = "Terminé !";
+    addHistory({ title: info.title, site: info.site, url: info.url, files: job.files, mode, format, crop, segments: segments.length, merged: merge });
+  } catch (e) {
+    if (job.status === "cancelled" || e.cancelled) { job.status = "cancelled"; job.line = "Annulé."; }
+    else { job.status = "error"; job.error = e.user ? e.message : "Erreur inattendue : " + e.message; }
+    job.files = job.files.filter(f => fs.existsSync(f));
+  } finally {
     dropFile(cookieFile);
-    const produced = job.file && path.dirname(path.resolve(job.file)) === path.resolve(tempDir) && fs.existsSync(job.file);
-    if (job.status === "cancelled") { job.line = "Annulé."; job.file = null; }
-    else if (code === 0 && produced) {
-      try {
-        job.file = await finalizeFile(job.file, settings.downloadDir);
-        job.status = "done"; job.percent = 100; job.line = "Terminé !";
-      } catch (e) { job.status = "error"; job.file = null; job.error = "Impossible d'enregistrer le fichier dans le dossier choisi (" + e.code + ")."; }
-    }
-    else { job.status = "error"; job.file = null; job.error = cleanError(errLines.join("\n")) || `Échec (code ${code}).`; }
     fs.rm(tempDir, { recursive: true, force: true }, () => {});
     sendProgress(job, true);
-  });
-  return { id: jobId };
+  }
 }
 
 function killTree(proc) {
@@ -741,6 +869,27 @@ app.on("web-contents-created", (_e, contents) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Mise à jour de l'appli depuis les releases GitHub (Volltarylle/VideoCutter).
+// Rien n'est téléchargé sans l'accord de l'utilisateur ; l'empreinte SHA-512 de latest.yml est vérifiée.
+// ---------------------------------------------------------------------------
+let appUpdater = null;
+const sendUpdate = s => mainWindow?.webContents.send("app-update", s);
+function setupAppUpdater() {
+  if (!app.isPackaged) return;
+  try { appUpdater = require("electron-updater").autoUpdater; } catch { return; }
+  appUpdater.autoDownload = false;
+  appUpdater.autoInstallOnAppQuit = true;
+  appUpdater.allowPrerelease = false;
+  appUpdater.allowDowngrade = false;
+  appUpdater.logger = null;
+  appUpdater.on("update-available", i => sendUpdate({ state: "available", version: String(i.version) }));
+  appUpdater.on("download-progress", p => sendUpdate({ state: "downloading", percent: Math.round(p.percent || 0) }));
+  appUpdater.on("update-downloaded", i => sendUpdate({ state: "ready", version: String(i.version) }));
+  appUpdater.on("error", () => sendUpdate({ state: "error" }));
+  setTimeout(() => appUpdater.checkForUpdates().catch(() => {}), 8000);
+}
+
 // Version installée : refuse les options de débogage passées en ligne de commande
 const DEBUG_SWITCHES = ["remote-debugging-port", "remote-debugging-pipe", "inspect", "inspect-brk", "js-flags"];
 if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
@@ -782,6 +931,7 @@ if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
     // Préparation de yt-dlp en parallèle de l'ouverture de la fenêtre
     ready = ensureYtdlp().catch(e => dialog.showErrorBox("VideoCutter", "yt-dlp est introuvable : " + e.message));
     createWindow();
+    setupAppUpdater();
     await ready;
     cleanTemp();
     setTimeout(() => updateYtdlp(false).then(r => r.updated && mainWindow?.webContents.send("ytdlp-updated", r.after)), 3000);
@@ -793,7 +943,28 @@ if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
   handle("cancel", id => cancelDownload(id));
   handle("reveal", id => {
     const job = jobs.get(String(id));
-    if (job?.status === "done" && job.file && fs.existsSync(job.file)) shell.showItemInFolder(job.file);
+    const f = job?.status === "done" && job.files.find(p => fs.existsSync(p));
+    if (f) shell.showItemInFolder(f);
+    return true;
+  });
+  // Presse-papiers : lu seulement quand la fenêtre le demande, et seulement s'il contient un lien web
+  handle("clipboard-link", async () => {
+    const t = String((await clipboard.readText()) ?? "").trim(); // readText peut être synchrone ou asynchrone selon la version d'Electron
+    return t.length <= 2048 && /^https?:\/\//i.test(t) ? validateUrl(t) : null;
+  });
+  handle("history-list", () => historyView());
+  handle("history-reveal", id => {
+    const h = loadHistory().find(x => x.id === String(id));
+    const f = h && (h.files || []).find(p => typeof p === "string" && fs.existsSync(p));
+    if (f) shell.showItemInFolder(f);
+    return !!f;
+  });
+  handle("history-remove", id => { history = loadHistory().filter(x => x.id !== String(id)); saveHistory(); return true; });
+  handle("history-clear", () => { history = []; saveHistory(); return true; });
+  handle("app-update-download", () => { appUpdater?.downloadUpdate().catch(() => sendUpdate({ state: "error" })); return !!appUpdater; });
+  handle("app-update-install", () => {
+    for (const j of jobs.values()) if (j.status === "running") { j.status = "cancelled"; killTree(j.proc); }
+    setImmediate(() => appUpdater?.quitAndInstall(false, true));
     return true;
   });
   handle("get-settings", async () => { await ready; return { downloadDir: settings.downloadDir, ytdlp: await ytdlpVersion(), version: app.getVersion(), termsAccepted: termsAccepted() }; });

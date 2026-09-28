@@ -57,11 +57,23 @@
     </div>
   </header>
 
+  <div class="update-banner" id="updBanner" hidden>
+    <span id="updText"></span>
+    <button type="button" id="updBtn" class="primary small"></button>
+  </div>
+
   <section class="card">
     <form id="urlForm" class="row">
-      <input id="url" type="text" placeholder="Colle le lien d'une vidéo (https://…)" autocomplete="off" spellcheck="false" autofocus>
+      <input id="url" type="text" placeholder="Colle ou glisse le lien d'une vidéo (https://…)" autocomplete="off" spellcheck="false" autofocus>
       <button class="primary" id="loadBtn" type="submit">Charger</button>
     </form>
+    <div id="clipSuggest" class="clip-suggest" hidden>
+      <span>📋 Lien copié : <span id="clipText"></span></span>
+      <span class="row">
+        <button type="button" id="clipUse" class="small primary">Charger</button>
+        <button type="button" id="clipDismiss" class="small" title="Ignorer">✕</button>
+      </span>
+    </div>
     <div id="loadErr" class="err" hidden></div>
     <button type="button" id="loginHere" class="small login-here" hidden>🔑 Se connecter à ce site</button>
   </section>
@@ -80,7 +92,7 @@
         <li>L'appli n'a <b>aucun serveur</b> : rien n'est envoyé ni stocké ailleurs que sur ton PC.</li>
         <li>Tes connexions sont enregistrées <b>uniquement sur ce PC</b>, chiffrées par Windows.</li>
         <li>Tes <b>mots de passe</b> sont tapés directement sur la page officielle du site ; l'appli ne les enregistre pas.</li>
-        <li>L'appli ne communique qu'avec le site de la vidéo, et avec GitHub pour mettre à jour son outil de téléchargement.</li>
+        <li>L'appli ne communique qu'avec le site de la vidéo, et avec GitHub pour vérifier ses mises à jour.</li>
         <li>Aucune statistique, aucune publicité, aucun pistage.</li>
       </ul>
     </div>
@@ -107,7 +119,16 @@
 
   <div id="editor" hidden>
     <section class="card">
-      <div class="player" id="player"></div>
+      <div class="player-wrap">
+        <div class="player" id="player"></div>
+        <div class="crop-layer" id="cropLayer" hidden>
+          <div class="crop-shade" id="shadeA"></div><div class="crop-shade" id="shadeB"></div>
+          <div class="crop-frame" id="cropFrame">
+            <div class="crop-grip" id="cropGrip" title="Glisse pour choisir la zone gardée"></div>
+            <span id="cropLabel">9:16</span>
+          </div>
+        </div>
+      </div>
       <div class="meta"><b id="title"></b><span id="channel"></span></div>
     </section>
 
@@ -150,6 +171,23 @@
           <button type="button" id="reset">Tout garder</button>
         </div>
       </div>
+
+      <div class="row mt">
+        <button type="button" id="addSeg">➕ Ajouter à la liste</button>
+        <span class="note small">pour télécharger plusieurs passages d'un coup</span>
+      </div>
+      <div id="segBox" hidden>
+        <h2 class="mt">Extraits à télécharger (<span id="segCount"></span>)</h2>
+        <ol id="segList" class="seg-list"></ol>
+        <div class="row">
+          <label class="radio"><input type="radio" name="merge" value="0" checked> Fichiers séparés</label>
+          <label class="radio"><input type="radio" name="merge" value="1"> Un seul fichier (extraits recollés)</label>
+          <button type="button" id="segClear" class="small">Vider la liste</button>
+        </div>
+      </div>
+
+      <p class="keys">Raccourcis : <kbd>I</kbd> début · <kbd>O</kbd> fin · <kbd>Espace</kbd> lecture/pause ·
+        <kbd>←</kbd><kbd>→</kbd> ±1 s · <kbd>Maj</kbd>+<kbd>←</kbd><kbd>→</kbd> ±0,1 s · <kbd>P</kbd> écouter l'extrait · <kbd>A</kbd> ajouter à la liste</p>
     </section>
 
     <section class="card">
@@ -178,6 +216,16 @@
           <option value="auto" selected>Auto</option>
         </select>
       </div>
+      <div class="row mt" id="cropRow">
+        <span class="note">Cadrage :</span>
+        <div class="seg" id="cropSeg">
+          <button type="button" data-crop="" class="on">Original</button>
+          <button type="button" data-crop="9:16">📱 Vertical 9:16</button>
+          <button type="button" data-crop="1:1">⬛ Carré 1:1</button>
+        </div>
+      </div>
+      <p class="note mt" id="cropNote" hidden>Déplace le cadre violet sur l'aperçu pour choisir la zone gardée (Reels, TikTok, Shorts…).
+        Le recadrage réencode la vidéo : le téléchargement prend un peu plus de temps.</p>
     </section>
 
     <section class="card">
@@ -189,7 +237,7 @@
           <button type="button" id="cancelBtn" class="small">Annuler</button>
         </div>
         <div id="result" hidden>
-          <div class="done">✓ Fichier enregistré</div>
+          <div class="done" id="doneText">✓ Fichier enregistré</div>
           <div class="filename" id="filename"></div>
           <button type="button" id="reveal">📂 Afficher dans le dossier</button>
         </div>
@@ -197,6 +245,16 @@
       </div>
     </section>
   </div>
+
+  <section class="card" id="historyPanel" hidden>
+    <div class="row between">
+      <h2>Historique</h2>
+      <button type="button" id="historyClose" class="small">Fermer</button>
+    </div>
+    <p class="note">Tes derniers téléchargements. L'historique est enregistré uniquement sur ce PC.</p>
+    <ul id="historyList" class="history-list"></ul>
+    <button type="button" id="historyClear" class="small">Effacer l'historique</button>
+  </section>
 
   <section class="card" id="aboutPanel" hidden>
     <div class="row between">
@@ -215,10 +273,11 @@
 
   <footer>
     <div class="row between">
-      <span>Dossier : <a href="#" id="folderLink"></a> · <a href="#" id="changeFolder">changer</a> · <a href="#" id="loginLink">🔑 Connexions</a></span>
+      <span>Dossier : <a href="#" id="folderLink"></a> · <a href="#" id="changeFolder">changer</a> · <a href="#" id="loginLink">🔑 Connexions</a> · <a href="#" id="historyLink">🕘 Historique</a></span>
       <span>yt-dlp <span id="ytVer">…</span> · <a href="#" id="updateLink">mettre à jour</a> · <a href="#" id="termsLink">Conditions</a> · <a href="#" id="aboutLink">Licences</a></span>
     </div>
   </footer>
 </main>
+<div class="drop-hint" id="dropHint" hidden><div>🔗 Lâche le lien ici</div></div>
 </body>
 </html>
