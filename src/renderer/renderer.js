@@ -97,11 +97,44 @@ function loadPlayer(j) {
   media = v; player.kind = "media";
 }
 
+// ---------------------------------------------------------------------------
+// Zoom de la barre de découpe : la barre affiche la « vue » [view.start, view.end]
+// ---------------------------------------------------------------------------
+const ZOOMS = [1, 4, 16, 64];
+let zoomIdx = 0, view = { start: 0, end: 1 };
+const pct = t => Math.min(100, Math.max(0, ((t - view.start) / Math.max(0.001, view.end - view.start)) * 100));
+function setView(center) {
+  const d = info.duration, span = Math.max(2, d / ZOOMS[zoomIdx]);
+  if (span >= d) { view = { start: 0, end: d }; }
+  else {
+    const s = Math.min(Math.max(0, center - span / 2), d - span);
+    view = { start: s, end: s + span };
+  }
+  for (const r of [$("startR"), $("endR")]) { r.min = view.start; r.max = view.end; }
+  $("viewStartLabel").textContent = fmt(view.start).replace(/\.\d$/, "");
+  $("durLabel").textContent = fmt(view.end).replace(/\.\d$/, "");
+  $("zoomLabel").textContent = "Zoom ×" + ZOOMS[zoomIdx];
+  $("zoomOut").disabled = zoomIdx === 0;
+  $("zoomIn").disabled = zoomIdx === ZOOMS.length - 1 || d / ZOOMS[zoomIdx + 1] < 2;
+  drawRange();
+}
+// Garde le point t visible quand on règle un temps hors de la vue (touches I/O, champs texte…)
+function ensureVisible(t) { if (zoomIdx > 0 && (t < view.start || t > view.end)) setView(t); }
+$("zoomIn").onclick = () => {
+  if (zoomIdx >= ZOOMS.length - 1) return;
+  zoomIdx++;
+  const len = info.end - info.start, span = info.duration / ZOOMS[zoomIdx];
+  setView(len <= span * 0.9 ? (info.start + info.end) / 2 : info.start + span / 2 - span * 0.05);
+};
+$("zoomOut").onclick = () => { if (zoomIdx > 0) { zoomIdx--; setView((info.start + info.end) / 2); } };
+
 // Tête de lecture + arrêt automatique à la fin de l'extrait
 function tick() {
   if (info && info.duration && player.kind !== "none") {
     const t = player.now();
-    $("head").style.left = `calc(${Math.min(100, (t / info.duration) * 100)}% - 1px)`;
+    const inView = t >= view.start && t <= view.end;
+    $("head").style.display = inView ? "" : "none";
+    if (inView) $("head").style.left = `calc(${pct(t)}% - 1px)`;
     if (previewStop !== null && t >= previewStop) { player.pause(); previewStop = null; }
   }
   requestAnimationFrame(tick);
@@ -152,8 +185,8 @@ $("urlForm").addEventListener("submit", async e => {
     $("cutCard").hidden = !j.duration;
     $("noCut").hidden = !!j.duration;
     if (j.duration) {
-      for (const r of [$("startR"), $("endR")]) r.max = j.duration;
-      $("durLabel").textContent = fmt(j.duration).replace(/\.\d$/, "");
+      zoomIdx = 0; info.start = 0; info.end = j.duration;
+      setView(j.duration / 2);
       setRange(0, j.duration);
     } else {
       info.start = info.end = 0;
@@ -176,6 +209,11 @@ $("urlForm").addEventListener("submit", async e => {
     loadPlayer(j);
     updateCropUI();
     lastClip = j.url; $("clipSuggest").hidden = true;
+    nameEdited = false; fillName();
+    for (const img of [$("frameStart"), $("frameEnd")]) img.removeAttribute("src");
+    $("frames").hidden = !(j.frames && j.duration);
+    scheduleFrames();
+    updateEstimate();
   } catch {
     showLoadError("Erreur inattendue. Réessaie.");
   } finally {
@@ -189,15 +227,24 @@ $("urlForm").addEventListener("submit", async e => {
 function setRange(s, e, source) {
   const d = info.duration;
   s = Math.min(Math.max(0, s), d); e = Math.min(Math.max(0, e), d);
-  if (e - s < 0.5) { if (source === "end") s = Math.max(0, e - 0.5); else e = Math.min(d, s + 0.5); }
+  const minLen = zoomIdx > 1 ? 0.2 : 0.5;
+  if (e - s < minLen) { if (source === "end") s = Math.max(0, e - minLen); else e = Math.min(d, s + minLen); }
   info.start = s; info.end = e;
-  $("startR").value = s; $("endR").value = e;
+  if (source === "start") ensureVisible(s); else if (source === "end") ensureVisible(e);
   if (document.activeElement !== $("startT")) $("startT").value = fmt(s);
   if (document.activeElement !== $("endT")) $("endT").value = fmt(e);
-  $("range").style.left = (s / d * 100) + "%";
-  $("range").style.width = ((e - s) / d * 100) + "%";
   $("clipLen").textContent = fmt(e - s);
+  drawRange();
   updateDlLabel();
+  updateEstimate();
+  scheduleFrames();
+}
+function drawRange() {
+  if (!info?.duration) return;
+  $("startR").value = Math.min(Math.max(info.start, view.start), view.end);
+  $("endR").value = Math.min(Math.max(info.end, view.start), view.end);
+  $("range").style.left = pct(info.start) + "%";
+  $("range").style.width = Math.max(0, pct(info.end) - pct(info.start)) + "%";
 }
 function updateDlLabel() {
   if (!info) return;
@@ -230,7 +277,10 @@ $("modeSeg").addEventListener("click", e => {
   $("quality").hidden = $("vFormat").hidden = mode !== "video";
   $("aFormat").hidden = mode !== "audio";
   $("cropRow").hidden = mode !== "video";
+  $("muteRow").hidden = $("sizeRow").hidden = mode !== "video";
   updateCropUI();
+  updateEstimate();
+  savePrefs();
 });
 
 // ---------------------------------------------------------------------------
@@ -243,6 +293,8 @@ $("cropSeg").addEventListener("click", e => {
   crop = b.dataset.crop;
   for (const x of $("cropSeg").children) x.classList.toggle("on", x === b);
   updateCropUI();
+  updateEstimate();
+  savePrefs();
 });
 
 // Rectangle occupé par l'image dans le lecteur (l'image est centrée, bandes noires autour)
@@ -320,6 +372,7 @@ function renderSegments() {
     return li;
   }));
   updateDlLabel();
+  updateEstimate();
 }
 function addSegment() {
   if (!info?.duration) return;
@@ -331,6 +384,120 @@ function addSegment() {
 }
 $("addSeg").onclick = addSegment;
 $("segClear").onclick = () => { segments = []; renderSegments(); };
+
+// ---------------------------------------------------------------------------
+// Miniatures du début et de la fin de l'extrait (images extraites par le moteur)
+// ---------------------------------------------------------------------------
+let frameTimer = null, frameReq = 0;
+function scheduleFrames() {
+  if (!info?.frames || !info.duration || $("frames").hidden) return;
+  clearTimeout(frameTimer);
+  frameTimer = setTimeout(async () => {
+    const req = ++frameReq, s = info.start, e = Math.max(s, info.end - 0.1), token = info.token;
+    $("frameStartT").textContent = fmt(s); $("frameEndT").textContent = fmt(info.end);
+    for (const img of [$("frameStart"), $("frameEnd")]) img.classList.add("loading");
+    const [a, b] = await Promise.all([api.frameAt(token, s), api.frameAt(token, e)]).catch(() => [null, null]);
+    if (req !== frameReq || token !== info?.token) return; // une demande plus récente a pris le relais
+    for (const [img, src] of [[$("frameStart"), a], [$("frameEnd"), b]]) {
+      img.classList.remove("loading");
+      if (src && /^data:image\/jpeg;base64,/.test(src)) img.src = src; else img.removeAttribute("src");
+    }
+  }, 350);
+}
+
+// ---------------------------------------------------------------------------
+// Nom du fichier : proposé à partir du titre, nettoyé si demandé, modifiable
+// ---------------------------------------------------------------------------
+let nameEdited = false;
+function cleanTitle(t) {
+  const s = String(t || "")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/[#@][\p{L}\p{N}_]+/gu, " ")
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}‍️⃣]/gu, " ")
+    .replace(/…|\.{3,}/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[\s\-–—|·:,.]+|[\s\-–—|·:,]+$/g, "")
+    .trim();
+  return s || String(t || "").trim();
+}
+function fillName() {
+  if (!info || nameEdited) return;
+  $("fileName").value = ($("cleanNames").checked ? cleanTitle(info.title) : info.title).slice(0, 150);
+}
+$("fileName").addEventListener("input", () => { nameEdited = true; });
+$("cleanNames").addEventListener("change", () => { nameEdited = false; fillName(); savePrefs(); });
+
+// ---------------------------------------------------------------------------
+// Taille estimée du fichier (à partir des débits annoncés par le site)
+// ---------------------------------------------------------------------------
+const AUDIO_KBPS = { mp3: 245, wav: 1411, flac: 900, m4a: 256, ogg: 192, opus: 160 };
+function humanSize(bytes) {
+  if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(1).replace(".", ",") + " Go";
+  if (bytes >= 1024 ** 2) return Math.round(bytes / 1024 ** 2) + " Mo";
+  return Math.max(1, Math.round(bytes / 1024)) + " Ko";
+}
+function updateEstimate() {
+  const out = $("sizeEst");
+  if (!info) { out.textContent = "—"; return; }
+  const speed = Number($("speed").value) || 1;
+  const lens = segments.length ? segments.map(s => s.end - s.start) : [info.duration ? info.end - info.start : 0];
+  const total = lens.reduce((a, b) => a + b, 0) / speed;
+  if (!total) { out.textContent = "inconnue (durée non fournie par le site)"; return; }
+  let kbps;
+  if (mode === "audio") kbps = AUDIO_KBPS[$("aFormat").value] || 192;
+  else {
+    const hs = info.heights || [], q = $("quality").value;
+    const h = q === "auto" ? hs[0] : Number(q);
+    const vk = info.rates?.video?.[h] || Object.values(info.rates?.video || {})[0];
+    if (!vk) { out.textContent = "inconnue pour ce site"; return; }
+    const area = crop === "9:16" ? 0.32 : crop === "1:1" ? 0.56 : 1; // part de l'image conservée
+    kbps = vk * area + ($("mute").checked ? 0 : info.rates.audio || 128);
+  }
+  let bytes = (kbps * 1000 / 8) * total;
+  const target = mode === "video" ? Number($("sizeMB").value) * 1024 * 1024 : 0;
+  const files = segments.length > 1 && document.querySelector("input[name=merge]:checked")?.value !== "1" ? segments.length : 1;
+  if (target) bytes = Math.min(bytes, target * files);
+  out.textContent = "≈ " + humanSize(bytes) + (files > 1 ? ` au total (${files} fichiers)` : "") + (target ? ` · maxi ${$("sizeMB").value} Mo par fichier` : "");
+}
+for (const id of ["quality", "vFormat", "aFormat", "speed", "sizeMB", "mute"]) $(id).addEventListener("change", () => { updateEstimate(); savePrefs(); });
+for (const r of document.querySelectorAll("input[name=merge]")) r.addEventListener("change", () => { updateEstimate(); savePrefs(); });
+
+// ---------------------------------------------------------------------------
+// Derniers choix mémorisés d'une ouverture à l'autre
+// ---------------------------------------------------------------------------
+let prefsReady = false, prefsTimer = null;
+function savePrefs() {
+  if (!prefsReady) return;
+  clearTimeout(prefsTimer);
+  prefsTimer = setTimeout(() => api.savePrefs({
+    mode, vFormat: $("vFormat").value, aFormat: $("aFormat").value, crop, speed: Number($("speed").value),
+    sizeMB: Number($("sizeMB").value), merge: document.querySelector("input[name=merge]:checked")?.value === "1",
+    mute: $("mute").checked, cleanNames: $("cleanNames").checked,
+  }), 300);
+}
+function applyPrefs(p) {
+  if (p.vFormat) $("vFormat").value = p.vFormat;
+  if (p.aFormat) $("aFormat").value = p.aFormat;
+  if (p.speed) $("speed").value = String(p.speed);
+  if (p.sizeMB !== undefined) $("sizeMB").value = String(p.sizeMB);
+  if (typeof p.mute === "boolean") $("mute").checked = p.mute;
+  if (typeof p.cleanNames === "boolean") $("cleanNames").checked = p.cleanNames;
+  if (typeof p.merge === "boolean") document.querySelector(`input[name=merge][value="${p.merge ? 1 : 0}"]`).checked = true;
+  if (p.crop !== undefined) $("cropSeg").querySelector(`[data-crop="${p.crop}"]`)?.click();
+  if (p.mode) $("modeSeg").querySelector(`[data-mode="${p.mode}"]`)?.click();
+  prefsReady = true;
+}
+
+// Réglages du téléchargement tels qu'affichés à l'écran (communs au bouton Télécharger et à la file d'attente)
+function currentOpts() {
+  return {
+    mode, format: mode === "audio" ? $("aFormat").value : $("vFormat").value, quality: $("quality").value,
+    merge: document.querySelector("input[name=merge]:checked")?.value === "1",
+    crop: mode === "video" ? crop : "", cropPos,
+    speed: Number($("speed").value) || 1, mute: mode === "video" && $("mute").checked,
+    sizeMB: mode === "video" ? Number($("sizeMB").value) : 0,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Téléchargement
@@ -348,10 +515,7 @@ $("dlBtn").onclick = async () => {
   $("dlBtn").disabled = true;
   resetProgressUI();
   const r = await api.download({
-    token: info.token, start: info.start, end: info.end, mode,
-    format: mode === "audio" ? $("aFormat").value : $("vFormat").value, quality: $("quality").value,
-    segments, merge: document.querySelector("input[name=merge]:checked")?.value === "1",
-    crop: mode === "video" ? crop : "", cropPos,
+    ...currentOpts(), token: info.token, start: info.start, end: info.end, segments, name: $("fileName").value.trim(),
   }).catch(() => ({ error: "Erreur inattendue." }));
   if (r.error) { finish(); $("bar").classList.remove("indet"); $("dlErr").textContent = r.error; $("dlErr").hidden = false; return; }
   currentJob = r.id;
@@ -359,6 +523,7 @@ $("dlBtn").onclick = async () => {
 $("cancelBtn").onclick = () => currentJob && api.cancel(currentJob);
 
 api.onProgress(p => {
+  if (queueProgress(p)) return; // téléchargement lancé par la file d'attente
   if (p.id !== currentJob) return;
   if (p.percent != null) { $("bar").classList.remove("indet"); $("bar").firstElementChild.style.width = p.percent + "%"; }
   $("status").textContent = p.line + (p.percent != null && p.status === "running" ? ` ${Math.round(p.percent)} %` : "");
@@ -368,7 +533,7 @@ api.onProgress(p => {
     doneJob = p.id;
     const files = p.files || [];
     $("doneText").textContent = files.length > 1 ? `✓ ${files.length} fichiers enregistrés` : "✓ Fichier enregistré";
-    $("filename").textContent = files.join("\n");
+    renderFileList(p.id, files);
     $("result").hidden = false;
   } else if (p.status === "cancelled") {
     $("bar").classList.remove("indet"); $("bar").firstElementChild.style.width = "0";
@@ -378,6 +543,21 @@ api.onProgress(p => {
   }
 });
 $("reveal").onclick = () => doneJob && api.reveal(doneJob);
+$("openFile").onclick = () => doneJob && api.openFile(doneJob);
+
+// Fichiers terminés : on peut les attraper et les lâcher dans un autre logiciel
+function renderFileList(jobId, files) {
+  $("fileList").replaceChildren(...files.map((name, i) => {
+    const li = document.createElement("li");
+    li.draggable = true;
+    li.title = "Glisse ce fichier vers ton logiciel de montage, Discord, un dossier…";
+    const grip = document.createElement("span"); grip.className = "grip"; grip.textContent = "⠿";
+    const label = document.createElement("span"); label.textContent = name;
+    li.append(grip, label);
+    li.addEventListener("dragstart", e => { e.preventDefault(); api.startDrag(jobId, i); });
+    return li;
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Pied de page : dossier + version de yt-dlp
@@ -387,6 +567,7 @@ async function refreshSettings() {
   $("folderLink").textContent = s.downloadDir;
   $("ytVer").textContent = s.ytdlp || "?";
   $("appVer").textContent = s.version ? "v" + s.version : "";
+  if (!prefsReady) applyPrefs(s.prefs || {});
 }
 $("folderLink").onclick = e => { e.preventDefault(); api.openFolder(); };
 $("changeFolder").onclick = async e => { e.preventDefault(); $("folderLink").textContent = await api.chooseFolder(); };
@@ -594,16 +775,31 @@ api.onHistoryChanged(() => { if (!$("historyPanel").hidden) refreshHistory(); })
 // ---------------------------------------------------------------------------
 // Mise à jour de l'appli
 // ---------------------------------------------------------------------------
+// « Quoi de neuf ? » : notes de la release, affichées comme du texte simple
+const hideNotes = () => { $("notesModal").hidden = true; };
+$("notesClose").onclick = hideNotes;
+$("notesModal").addEventListener("click", e => { if (e.target === $("notesModal")) hideNotes(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("notesModal").hidden) { hideNotes(); e.preventDefault(); } });
+$("notesUpdate").onclick = () => { hideNotes(); $("updBtn").click(); };
+
 api.onAppUpdate(s => {
-  const banner = $("updBanner"), btn = $("updBtn");
+  const banner = $("updBanner"), btn = $("updBtn"), notesBtn = $("updNotesBtn");
   if (s.state === "available") {
     $("updText").textContent = `🎉 VideoCutter ${s.version} est disponible.`;
     btn.textContent = "Mettre à jour"; btn.disabled = false; btn.hidden = false;
-    btn.onclick = () => { btn.disabled = true; $("updText").textContent = "Téléchargement de la mise à jour…"; api.appUpdateDownload(); };
+    btn.onclick = () => { btn.disabled = true; notesBtn.hidden = true; $("updText").textContent = "Téléchargement de la mise à jour…"; api.appUpdateDownload(); };
+    const notes = typeof s.notes === "string" ? s.notes.trim() : "";
+    notesBtn.hidden = !notes;
+    notesBtn.onclick = () => {
+      $("notesTitle").textContent = `Quoi de neuf dans la ${s.version} ?`;
+      $("notesText").textContent = notes;
+      $("notesUpdate").hidden = btn.disabled;
+      $("notesModal").hidden = false; $("notesClose").focus();
+    };
     banner.hidden = false;
   } else if (s.state === "downloading") {
     $("updText").textContent = `Téléchargement de la mise à jour… ${s.percent} %`;
-    btn.hidden = true; banner.hidden = false;
+    btn.hidden = true; notesBtn.hidden = true; banner.hidden = false;
   } else if (s.state === "ready") {
     $("updText").textContent = `✓ VideoCutter ${s.version} est prêt à être installé.`;
     btn.textContent = "Redémarrer et installer"; btn.disabled = false; btn.hidden = false;
@@ -617,6 +813,114 @@ api.onAppUpdate(s => {
     btn.hidden = true;
   }
 });
+// ---------------------------------------------------------------------------
+// File d'attente : téléchargements l'un après l'autre
+// ---------------------------------------------------------------------------
+let queue = [], queueRunning = false, queueStopAsked = false, queueSeq = 0;
+const queueWaiters = new Map(); // id de tâche -> fonction appelée à la fin du téléchargement
+const Q_STATUS = { waiting: "En attente", running: "En cours…", done: "✓ Terminé", error: "Échec", cancelled: "Annulé" };
+
+function renderQueue() {
+  const waiting = queue.filter(q => q.status === "waiting").length;
+  $("queueBadge").textContent = waiting ? `(${waiting})` : "";
+  $("queueList").replaceChildren(...queue.map(q => {
+    const li = document.createElement("li");
+    li.className = "q-" + q.status;
+    const text = document.createElement("div");
+    const title = document.createElement("div"); title.className = "h-title"; title.textContent = q.title;
+    const meta = document.createElement("div"); meta.className = "h-meta";
+    meta.textContent = [Q_STATUS[q.status] + (q.status === "running" && q.percent != null ? ` ${Math.round(q.percent)} %` : ""), q.detail, q.msg].filter(Boolean).join(" · ");
+    text.append(title, meta);
+    const actions = document.createElement("div"); actions.className = "h-actions";
+    if (q.status === "waiting" || q.status === "running") {
+      const x = document.createElement("button"); x.type = "button"; x.className = "small"; x.textContent = "✕";
+      x.title = q.status === "running" ? "Annuler ce téléchargement" : "Retirer de la file";
+      x.onclick = () => { if (q.status === "running") api.cancel(q.jobId); else { queue = queue.filter(o => o !== q); renderQueue(); } };
+      actions.append(x);
+    }
+    li.append(text, actions);
+    return li;
+  }));
+  $("queueStart").hidden = queueRunning;
+  $("queueStart").disabled = !waiting;
+  $("queueStop").hidden = !queueRunning;
+}
+const describe = o => [o.mode === "audio" ? "Musique " + o.format.toUpperCase() : "Vidéo " + o.format.toUpperCase(),
+  o.crop, o.speed !== 1 ? "×" + String(o.speed).replace(".", ",") : "", o.mute ? "sans son" : "", o.sizeMB ? `< ${o.sizeMB} Mo` : ""].filter(Boolean).join(" · ");
+
+// Ajoute l'extrait actuellement réglé (mêmes réglages que le bouton Télécharger)
+$("queueAdd").onclick = () => {
+  if (!info) return;
+  const opts = { ...currentOpts(), start: info.start, end: info.end, segments: segments.map(s => ({ ...s })), name: $("fileName").value.trim() };
+  const parts = segments.length ? `${segments.length} extrait${segments.length > 1 ? "s" : ""}` : info.duration && (info.start > 0.05 || info.end < info.duration - 0.05) ? `${fmt(info.start)} → ${fmt(info.end)}` : "vidéo entière";
+  queue.push({ id: ++queueSeq, status: "waiting", token: info.token, title: $("fileName").value.trim() || info.title, opts, detail: parts + " · " + describe(opts) });
+  renderQueue();
+  const b = $("queueAdd"); b.textContent = "✓ Ajouté"; setTimeout(() => { b.textContent = "➕ File d'attente"; }, 1500);
+};
+
+// Plusieurs liens collés : chaque vidéo en entier, avec les réglages de format actuels
+$("bulkAdd").onclick = () => {
+  const links = [...new Set($("bulkLinks").value.split(/\s+/).map(s => s.trim()).filter(s => /^https?:\/\/\S+$/i.test(s)))].slice(0, 50);
+  if (!links.length) { $("bulkMsg").textContent = "Aucun lien valide (ils doivent commencer par https://)."; return; }
+  const base = { ...currentOpts(), crop: "", segments: [], merge: false }; // le cadre 9:16 dépend de chaque vidéo : non appliqué ici
+  for (const url of links) queue.push({ id: ++queueSeq, status: "waiting", url, title: url, opts: { ...base }, detail: "vidéo entière · " + describe(base) });
+  $("bulkLinks").value = "";
+  $("bulkMsg").textContent = `${links.length} lien${links.length > 1 ? "s" : ""} ajouté${links.length > 1 ? "s" : ""}.`;
+  renderQueue();
+};
+
+function queueProgress(p) {
+  const q = queue.find(o => o.jobId === p.id);
+  if (!q) return false;
+  q.percent = p.percent;
+  if (p.status !== "running") {
+    q.status = p.status;
+    q.msg = p.status === "error" ? p.error : p.status === "done" ? (p.files || []).join(", ") : "";
+    queueWaiters.get(p.id)?.();
+  }
+  renderQueue();
+  return true;
+}
+
+async function runQueue() {
+  if (queueRunning) return;
+  queueRunning = true; queueStopAsked = false; renderQueue();
+  let q;
+  while (!queueStopAsked && (q = queue.find(o => o.status === "waiting"))) {
+    q.status = "running"; q.percent = null; q.msg = ""; renderQueue();
+    try {
+      if (!q.token) { // lien collé : on lit d'abord les infos de la vidéo
+        q.msg = "lecture du lien…"; renderQueue();
+        const j = await api.info(q.url);
+        if (j.error) { q.status = "error"; q.msg = j.error.split("\n")[0]; continue; }
+        if (j.isLive) { q.status = "error"; q.msg = "direct en cours"; continue; }
+        q.token = j.token; q.title = j.title; q.msg = "";
+        if (q.opts.mode === "video" && !j.hasVideo) q.opts.mode = "audio", q.opts.format = "mp3";
+        q.opts.name = $("cleanNames").checked ? cleanTitle(j.title) : j.title;
+      }
+      const r = await api.download({ ...q.opts, token: q.token });
+      if (r.error) { q.status = "error"; q.msg = r.error; continue; }
+      q.jobId = r.id; renderQueue();
+      await new Promise(res => queueWaiters.set(r.id, res));
+      queueWaiters.delete(r.id);
+    } catch { q.status = "error"; q.msg = "erreur inattendue"; }
+    finally { renderQueue(); }
+  }
+  queueRunning = false;
+  $("queueStop").textContent = "⏸ Arrêter après le téléchargement en cours";
+  renderQueue();
+}
+$("queueStart").onclick = runQueue;
+$("queueStop").onclick = () => { queueStopAsked = true; $("queueStop").textContent = "⏸ Arrêt après ce téléchargement…"; };
+$("queueClear").onclick = () => { queue = queue.filter(q => q.status === "running"); renderQueue(); };
+$("queueLink").onclick = e => {
+  e.preventDefault();
+  $("queuePanel").hidden = !$("queuePanel").hidden;
+  if (!$("queuePanel").hidden) { renderQueue(); $("queuePanel").scrollIntoView({ behavior: "smooth" }); }
+};
+$("queueClose").onclick = () => { $("queuePanel").hidden = true; };
+renderQueue();
+
 // Après la fermeture d'une fenêtre de connexion : mise à jour de la liste, et nouvel essai du lien en échec
 api.onLoginChanged(() => {
   if (!$("loginPanel").hidden) refreshLogins();

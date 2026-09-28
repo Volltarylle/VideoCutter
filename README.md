@@ -20,7 +20,9 @@
 **Formats** — Vidéo : MP4, MKV, WEBM, MOV, AVI · Musique : MP3, WAV, FLAC, M4A, OGG, OPUS
 **Qualité** — « Auto » prend la meilleure qualité disponible ; le menu ne propose que les qualités qui existent pour la vidéo.
 
-Autres fonctions : annulation d'un téléchargement, choix du dossier de destination, mise à jour automatique de l'outil de téléchargement, connexion aux sites pour les vidéos réservées aux membres.
+**Découpe** — aperçu, miniatures du début et de la fin, zoom sur la barre de découpe, plusieurs extraits d'un coup (fichiers séparés ou recollés), raccourcis clavier (`I`, `O`, `Espace`, flèches…).
+**Export** — recadrage vertical 9:16 ou carré 1:1, vitesse (×0,5 à ×2), vidéo sans le son, taille maximale (10, 25 ou 50 Mo), taille estimée avant le téléchargement, nom de fichier modifiable et nettoyé (emojis, #, @).
+**Confort** — file d'attente, historique, lien du presse-papiers proposé automatiquement, glisser-déposer d'un lien, glisser le fichier terminé directement dans un autre logiciel, choix mémorisés, notification et progression dans la barre des tâches, mise à jour automatique avec « Quoi de neuf ? », connexion aux sites pour les vidéos réservées aux membres.
 
 ## Installation (Windows 10 / 11)
 

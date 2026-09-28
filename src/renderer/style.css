@@ -92,7 +92,61 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 footer { color: var(--muted); font-size: 13px; padding: 4px 4px 0; }
 footer #folderLink { word-break: break-all; }
 
-#filename { white-space: pre-line; }
+/* Zoom de la barre de découpe */
+.ticks { align-items: center; }
+.zoom-ctl { display: inline-flex; align-items: center; gap: 6px; }
+.zoom-ctl button { padding: 1px 10px; font-size: 14px; line-height: 1.4; }
+.zoom-ctl span { min-width: 64px; text-align: center; }
+
+/* Miniatures du début et de la fin */
+.frames { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.frames figure { margin: 0; }
+.frame-box { aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center; }
+.frame-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.frame-box img:not([src]) { display: none; }
+.frame-box img.loading { opacity: .45; }
+.frames figcaption { margin-top: 4px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+
+/* Options d'export */
+label.inline { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+.check-inline { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; white-space: nowrap; }
+.check-inline input { width: 16px; height: 16px; accent-color: var(--accent); }
+#sizeEst { color: var(--text); }
+
+/* Nom du fichier + boutons de téléchargement */
+.name-row { margin-bottom: 14px; }
+.name-row label[for] { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.dl-row { flex-wrap: nowrap; }
+.dl-row .big { flex: 1; width: auto; }
+.dl-row #queueAdd { white-space: nowrap; align-self: stretch; }
+
+/* Fichiers terminés, à glisser vers un autre logiciel */
+.file-list { list-style: none; margin: 6px 0 12px; padding: 0; display: grid; gap: 6px; }
+.file-list li { display: flex; gap: 10px; align-items: center; padding: 8px 12px; border: 1px dashed var(--sel); border-radius: 10px;
+  background: var(--accent-soft); cursor: grab; font-size: 13px; word-break: break-all; }
+.file-list li:active { cursor: grabbing; }
+.file-list .grip { color: var(--accent-ink); font-size: 16px; flex: none; }
+
+/* « Quoi de neuf ? » */
+.notes-box { width: min(560px, 100%); }
+.notes-text { white-space: pre-line; overflow-y: auto; max-height: 50vh; padding: 12px 14px; border-radius: 10px;
+  background: var(--bg); border: 1px solid var(--line); font-size: 14px; line-height: 1.6; }
+
+/* File d'attente */
+#bulkLinks { width: 100%; margin-top: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--text); font: 13px/1.5 "Segoe UI", system-ui, sans-serif; resize: vertical; }
+#bulkLinks:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.queue-list { list-style: none; margin: 12px 0; padding: 0; }
+.queue-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.queue-list .h-title { font-weight: 600; word-break: break-word; }
+.queue-list .h-meta { color: var(--muted); font-size: 13px; word-break: break-word; }
+.queue-list .h-actions { flex: none; }
+.queue-list li.q-running .h-meta { color: var(--accent-ink); }
+.queue-list li.q-done .h-meta { color: var(--ok); }
+.queue-list li.q-error .h-meta { color: var(--danger); }
+#queueBadge { font-weight: 600; }
+
+@media (max-width: 560px) { .frames { grid-template-columns: 1fr; } .dl-row { flex-wrap: wrap; } }
 
 /* Bandeau de mise à jour de l'appli */
 .update-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;

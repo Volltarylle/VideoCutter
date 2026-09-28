@@ -75,6 +75,20 @@
   </div>
 </div>
 
+<div class="modal" id="notesModal" hidden role="dialog" aria-modal="true" aria-labelledby="notesTitle">
+  <div class="modal-box notes-box">
+    <div class="row between">
+      <h2 id="notesTitle">Quoi de neuf ?</h2>
+      <button type="button" id="notesClose" class="small">Fermer</button>
+    </div>
+    <div class="notes-text" id="notesText"></div>
+    <div class="row between mt">
+      <span class="note small">Tu peux mettre à jour maintenant ou plus tard.</span>
+      <button type="button" id="notesUpdate" class="primary">Mettre à jour</button>
+    </div>
+  </div>
+</div>
+
 <main>
   <header>
     <img src="icon.png" alt="" width="40" height="40">
@@ -86,7 +100,10 @@
 
   <div class="update-banner" id="updBanner" hidden>
     <span id="updText"></span>
-    <button type="button" id="updBtn" class="primary small"></button>
+    <span class="row">
+      <button type="button" id="updNotesBtn" class="small" hidden>Quoi de neuf ?</button>
+      <button type="button" id="updBtn" class="primary small"></button>
+    </span>
   </div>
 
   <section class="card">
@@ -172,7 +189,19 @@
         <input type="range" id="startR" min="0" step="0.1" aria-label="Début">
         <input type="range" id="endR" min="0" step="0.1" aria-label="Fin">
       </div>
-      <div class="ticks"><span>0:00</span><span id="durLabel"></span></div>
+      <div class="ticks">
+        <span id="viewStartLabel">0:00</span>
+        <span class="zoom-ctl">
+          <button type="button" id="zoomOut" class="small" title="Dézoomer">−</button>
+          <span id="zoomLabel">Zoom ×1</span>
+          <button type="button" id="zoomIn" class="small" title="Zoomer sur le passage choisi">+</button>
+        </span>
+        <span id="durLabel"></span>
+      </div>
+      <div class="frames" id="frames" hidden>
+        <figure><div class="frame-box"><img id="frameStart" alt=""></div><figcaption>Début · <span id="frameStartT"></span></figcaption></figure>
+        <figure><div class="frame-box"><img id="frameEnd" alt=""></div><figcaption>Fin · <span id="frameEndT"></span></figcaption></figure>
+      </div>
 
       <div class="times">
         <div class="time">
@@ -252,10 +281,42 @@
       </div>
       <p class="note mt" id="cropNote" hidden>Déplace le cadre violet sur l'aperçu pour choisir la zone gardée (Reels, TikTok, Shorts…).
         Le recadrage réencode la vidéo : le téléchargement prend un peu plus de temps.</p>
+      <div class="row mt">
+        <label class="inline">Vitesse
+          <select id="speed" aria-label="Vitesse">
+            <option value="0.5">×0,5 (ralenti)</option>
+            <option value="0.75">×0,75</option>
+            <option value="1" selected>×1 (normale)</option>
+            <option value="1.25">×1,25</option>
+            <option value="1.5">×1,5</option>
+            <option value="2">×2 (accéléré)</option>
+          </select>
+        </label>
+        <label class="inline" id="sizeRow">Taille maxi
+          <select id="sizeMB" aria-label="Taille maximale du fichier">
+            <option value="0" selected>Libre</option>
+            <option value="10">10 Mo (Discord)</option>
+            <option value="25">25 Mo (e-mail)</option>
+            <option value="50">50 Mo</option>
+          </select>
+        </label>
+        <label class="check-inline" id="muteRow"><input type="checkbox" id="mute"> Sans le son</label>
+      </div>
+      <p class="note mt">Taille estimée : <b id="sizeEst">—</b></p>
     </section>
 
     <section class="card">
-      <button class="primary big" id="dlBtn" type="button">Télécharger l'extrait</button>
+      <div class="name-row">
+        <label for="fileName">Nom du fichier</label>
+        <div class="row">
+          <input id="fileName" type="text" spellcheck="false" placeholder="Nom du fichier">
+          <label class="check-inline" title="Retire les emojis, hashtags, @pseudos et « … » du titre"><input type="checkbox" id="cleanNames" checked> Nettoyer le nom</label>
+        </div>
+      </div>
+      <div class="row dl-row">
+        <button class="primary big" id="dlBtn" type="button">Télécharger l'extrait</button>
+        <button type="button" id="queueAdd" title="Mettre ce téléchargement en file d'attente">➕ File d'attente</button>
+      </div>
       <div id="progress" hidden>
         <div class="bar indet" id="bar"><div></div></div>
         <div class="row between">
@@ -264,13 +325,37 @@
         </div>
         <div id="result" hidden>
           <div class="done" id="doneText">✓ Fichier enregistré</div>
-          <div class="filename" id="filename"></div>
-          <button type="button" id="reveal">📂 Afficher dans le dossier</button>
+          <p class="note small">Astuce : glisse le fichier ci-dessous directement dans ton logiciel de montage, Discord, etc.</p>
+          <ul class="file-list" id="fileList"></ul>
+          <div class="row">
+            <button type="button" id="openFile">▶ Ouvrir</button>
+            <button type="button" id="reveal">📂 Afficher dans le dossier</button>
+          </div>
         </div>
         <div id="dlErr" class="err" hidden></div>
       </div>
     </section>
   </div>
+
+  <section class="card" id="queuePanel" hidden>
+    <div class="row between">
+      <h2>File d'attente</h2>
+      <button type="button" id="queueClose" class="small">Fermer</button>
+    </div>
+    <p class="note">Les téléchargements se font l'un après l'autre. Ajoute un extrait réglé avec « ➕ File d'attente »,
+      ou colle plusieurs liens ci-dessous : chaque vidéo sera téléchargée en entier, avec les réglages de format actuels.</p>
+    <textarea id="bulkLinks" rows="3" spellcheck="false" placeholder="Un lien par ligne…"></textarea>
+    <div class="row mt">
+      <button type="button" id="bulkAdd">➕ Ajouter ces liens</button>
+      <span class="note small" id="bulkMsg"></span>
+    </div>
+    <ol id="queueList" class="queue-list"></ol>
+    <div class="row">
+      <button type="button" id="queueStart" class="primary">▶ Lancer la file</button>
+      <button type="button" id="queueStop" class="small" hidden>⏸ Arrêter après le téléchargement en cours</button>
+      <button type="button" id="queueClear" class="small">Vider la file</button>
+    </div>
+  </section>
 
   <section class="card" id="historyPanel" hidden>
     <div class="row between">
@@ -299,7 +384,7 @@
 
   <footer>
     <div class="row between">
-      <span>Dossier : <a href="#" id="folderLink"></a> · <a href="#" id="changeFolder">changer</a> · <a href="#" id="loginLink">🔑 Connexions</a> · <a href="#" id="historyLink">🕘 Historique</a></span>
+      <span>Dossier : <a href="#" id="folderLink"></a> · <a href="#" id="changeFolder">changer</a> · <a href="#" id="loginLink">🔑 Connexions</a> · <a href="#" id="historyLink">🕘 Historique</a> · <a href="#" id="queueLink">📋 File d'attente <span id="queueBadge"></span></a></span>
       <span>yt-dlp <span id="ytVer">…</span> · <a href="#" id="updateLink">mettre à jour</a> · <a href="#" id="termsLink">Conditions</a> · <a href="#" id="aboutLink">Licences</a></span>
     </div>
   </footer>

@@ -2,7 +2,7 @@
 // Toute la logique de téléchargement tourne ici ; la fenêtre ne communique
 // qu'à travers quelques appels IPC strictement validés (voir preload.js).
 
-const { app, BrowserWindow, ipcMain, shell, session, protocol, dialog, Menu, net, clipboard } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, session, protocol, dialog, Menu, net, clipboard, Notification, nativeImage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { spawn, execFile } = require("child_process");
@@ -107,6 +107,20 @@ function migrateOldData() {
   fs.rm(path.join(app.getPath("temp"), "decoupeur-youtube"), { recursive: true, force: true }, () => {});
 }
 
+// Derniers choix de l'utilisateur, retrouvés à chaque ouverture (uniquement des valeurs connues).
+function sanitizePrefs(p) {
+  if (!p || typeof p !== "object") return {};
+  const out = {};
+  if (p.mode === "video" || p.mode === "audio") out.mode = p.mode;
+  if (["mp4", "mkv", "webm", "mov", "avi"].includes(p.vFormat)) out.vFormat = p.vFormat;
+  if (["mp3", "wav", "flac", "m4a", "ogg", "opus"].includes(p.aFormat)) out.aFormat = p.aFormat;
+  if (["", "9:16", "1:1"].includes(p.crop)) out.crop = p.crop;
+  if ([0.5, 0.75, 1, 1.25, 1.5, 2].includes(p.speed)) out.speed = p.speed;
+  if ([0, 10, 25, 50].includes(p.sizeMB)) out.sizeMB = p.sizeMB;
+  for (const k of ["merge", "mute", "cleanNames"]) if (typeof p[k] === "boolean") out[k] = p[k];
+  return out;
+}
+
 function loadSettings() {
   const s = { downloadDir: app.getPath("downloads"), lastUpdateCheck: 0 };
   try {
@@ -114,6 +128,7 @@ function loadSettings() {
     if (isDir(saved.downloadDir)) s.downloadDir = saved.downloadDir;
     if (Number.isFinite(saved.lastUpdateCheck)) s.lastUpdateCheck = saved.lastUpdateCheck;
     if (saved.terms && typeof saved.terms.version === "string") s.terms = { version: saved.terms.version, acceptedAt: String(saved.terms.acceptedAt || "") };
+    s.prefs = sanitizePrefs(saved.prefs);
   } catch {}
   return s;
 }
@@ -317,12 +332,38 @@ function pickPreview(formats, hasVideo) {
   if (!ok.length) return null;
   const h = f => f.height || 360;
   const score = f => (hasVideo ? (h(f) <= 720 ? h(f) : -h(f)) + (has(f.acodec) && f.acodec ? 0.5 : 0) : (f.abr || f.tbr || 0));
-  const f = ok.sort((a, b) => score(b) - score(a))[0];
+  return formatSource(ok.sort((a, b) => score(b) - score(a))[0]);
+}
+
+// Adresse + en-têtes (dont cookies éventuels exigés par le site) pour lire un format directement.
+function formatSource(f) {
   const headers = safeHeaders(f.http_headers);
   if (typeof f.cookies === "string" && /^[\x20-\xff]*$/.test(f.cookies)) {
     headers.Cookie = f.cookies.split(";").map(c => c.trim()).filter(c => /^[^=]+=/.test(c)).map(c => c.replace(/;?\s*(Domain|Path|Expires|Max-Age|Secure|HttpOnly)=?[^;]*/gi, "")).join("; ");
   }
   return { url: httpUrl(f.url), headers };
+}
+
+// Petite source vidéo (≤ 360p de préférence) pour extraire les miniatures de début/fin avec FFmpeg.
+function pickFrameSource(formats) {
+  const vids = (formats || []).filter(f => (f.vcodec ? f.vcodec !== "none" : /^(mp4|webm|mov|flv)$/.test(f.ext || "")) && httpUrl(f.url)
+    && /^(https?|m3u8|m3u8_native)$/.test(f.protocol || ""));
+  if (!vids.length) return null;
+  const h = f => f.height || 360;
+  const score = f => (/^https?$/.test(f.protocol) ? 10000 : 0) + (h(f) >= 144 && h(f) <= 360 ? 5000 - h(f) : -h(f));
+  return formatSource(vids.sort((a, b) => score(b) - score(a))[0]);
+}
+
+// Débits (kbit/s) par hauteur d'image et pour le son : servent à estimer la taille du fichier.
+function formatRates(formats, heights) {
+  const kbps = f => finite(f.vbr, 0) || finite(f.tbr, 0) || (finite(f.filesize || f.filesize_approx, 0) && finite(f.duration, 0) ? (f.filesize || f.filesize_approx) * 8 / f.duration / 1000 : 0);
+  const audio = Math.max(0, ...formats.filter(f => f.acodec && f.acodec !== "none" && (!f.vcodec || f.vcodec === "none")).map(f => finite(f.abr, 0) || finite(f.tbr, 0)));
+  const video = {};
+  for (const hh of heights) {
+    const k = Math.max(0, ...formats.filter(f => f.vcodec !== "none" && Math.round(f.height) === hh).map(kbps));
+    if (k > 0) video[hh] = Math.round(k);
+  }
+  return { audio: Math.round(audio) || 128, video };
 }
 
 // Mesure la durée avec ffprobe quand le site ne la fournit pas.
@@ -460,6 +501,7 @@ async function getInfo(url) {
     title, site,
     url: httpUrl(j.webpage_url) || link, duration, hasVideo, hasAudio, preview, heights, useCookies,
     thumb: httpUrl(j.thumbnail) ? { url: httpUrl(j.thumbnail), headers: {} } : null,
+    frameSrc: hasVideo && duration ? pickFrameSource(formats) : null,
   };
   infos.set(token, entry);
   while (infos.size > MAX_INFOS) infos.delete(infos.keys().next().value);
@@ -469,7 +511,30 @@ async function getInfo(url) {
     width: finite(j.width, 0) || null, height: finite(j.height, 0) || null,
     duration, isLive: !!j.is_live, hasVideo, hasAudio, heights, loggedIn: useCookies,
     youtubeId: isYouTube ? j.id : null, preview: !!entry.preview, thumb: !!entry.thumb,
+    frames: !!entry.frameSrc, rates: formatRates(formats, heights),
   };
+}
+
+// Image de la vidéo à un instant donné (miniatures de début/fin), extraite par FFmpeg en JPEG.
+const frameCache = new Map();
+async function frameAt(token, t) {
+  const entry = infos.get(String(token));
+  if (!entry?.frameSrc || !entry.duration) return null;
+  t = Math.min(Math.max(0, finite(Number(t), 0)), Math.max(0, entry.duration - 0.05));
+  const key = token + "@" + t.toFixed(1);
+  if (frameCache.has(key)) return frameCache.get(key);
+  const src = entry.frameSrc;
+  const hdr = Object.entries(src.headers).map(([k, v]) => `${k}: ${v}\r\n`).join("");
+  const args = ["-hide_banner", "-nostdin", "-loglevel", "error", "-rw_timeout", "10000000",
+    "-protocol_whitelist", "https,http,tls,tcp,crypto,hls", "-ss", t.toFixed(2)];
+  if (hdr) args.push("-headers", hdr);
+  args.push("-i", src.url, "-frames:v", "1", "-vf", "scale=-2:180", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "5", "pipe:1");
+  const img = await new Promise(resolve => execFile(FFMPEG(), args,
+    { env: CHILD_ENV, windowsHide: true, timeout: 20000, encoding: "buffer", maxBuffer: 4 * 1024 * 1024 },
+    (err, out) => resolve(!err && out?.length > 100 && out[0] === 0xff && out[1] === 0xd8 ? "data:image/jpeg;base64," + out.toString("base64") : null)));
+  frameCache.set(key, img);
+  while (frameCache.size > 60) frameCache.delete(frameCache.keys().next().value);
+  return img;
 }
 
 // ---------------------------------------------------------------------------
@@ -488,9 +553,22 @@ const CROPS = { "9:16": 9 / 16, "1:1": 1 };
 const CROP_TAGS = { "9:16": "9x16", "1:1": "1x1" };
 const MAX_SEGMENTS = 20;
 
-function buildArgs({ url, start, end, duration, mode, format, quality, cookieFile }, tempDir) {
+const SPEEDS = new Set([0.5, 0.75, 1, 1.25, 1.5, 2]);
+const SIZE_TARGETS = new Set([0, 10, 25, 50]); // Mo (0 = pas de limite)
+
+// Nom de fichier choisi par l'utilisateur : rendu sûr pour Windows (et pour le modèle de nom de yt-dlp).
+function safeName(name) {
+  if (typeof name !== "string") return "";
+  let s = name.normalize("NFC").replace(/[\u0000-\u001f<>:"/\\|?*]+/g, " ").replace(/\s+/g, " ").trim();
+  s = s.replace(/[. ]+$/, "").slice(0, 150).trim();
+  if (/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(s)) s = "_" + s;
+  return s;
+}
+
+function buildArgs({ url, start, end, duration, mode, format, quality, cookieFile, name }, tempDir) {
   const cut = start > 0.05 || end < duration - 0.05;
   const suffix = cut ? ` [${stamp(start)}-${stamp(end)}]` : "";
+  const base = name ? name.replace(/%/g, "%%") : "%(title)s"; // « % » a un sens spécial dans le modèle de yt-dlp
   const args = [
     ...BASE_ARGS,
     "--newline", "--progress", "--no-mtime", "--windows-filenames", "--trim-filenames", "180",
@@ -498,7 +576,7 @@ function buildArgs({ url, start, end, duration, mode, format, quality, cookieFil
     "--print", "after_move:filepath", "--no-simulate",
     // Tout se passe dans un dossier privé ; le fichier fini est déplacé ensuite (voir finalizeFile)
     "-P", tempDir, "-P", `temp:${path.join(tempDir, "parts")}`,
-    "-o", `%(title)s${suffix}.%(ext)s`,
+    "-o", `${base}${suffix}.%(ext)s`,
   ];
   if (cut) args.push("--download-sections", `*${start.toFixed(2)}-${end.toFixed(2)}`, "--force-keyframes-at-cuts");
 
@@ -538,6 +616,7 @@ function sendProgress(job, force) {
   job.lastSent = now;
   const { id, status, percent, line, error } = job;
   mainWindow?.webContents.send("progress", { id, status, percent, line, error, files: (job.files || []).map(f => path.basename(f)) });
+  updateTaskbar();
 }
 
 // Lance un programme (yt-dlp ou ffmpeg) pour une tâche, ligne par ligne, annulable.
@@ -569,16 +648,53 @@ function audioCodecArgs(ext) {
 }
 const FFMPEG = () => path.join(FFMPEG_DIR, "ffmpeg.exe");
 
-// Recadre une vidéo au format demandé (9:16 ou 1:1), à la position choisie (0 = gauche/haut, 1 = droite/bas).
-async function cropFile(job, src, cropKey, pos, report) {
-  const r = CROPS[cropKey], ext = path.extname(src);
-  const out = src.slice(0, -ext.length) + ` ${CROP_TAGS[cropKey]}` + ext;
-  const vf = `crop=w=trunc(min(iw\\,ih*${r})/2)*2:h=trunc(min(ih\\,iw/${r})/2)*2:x=(iw-ow)*${pos.toFixed(4)}:y=(ih-oh)*${pos.toFixed(4)}`;
-  const args = ["-hide_banner", "-nostdin", "-y", "-i", src, "-vf", vf, ...videoCodecArgs(ext), "-c:a", "copy", "-map_metadata", "0"];
-  if (ext === ".mp4" || ext === ".mov") args.push("-movflags", "+faststart");
-  args.push(out);
-  const code = await runTool(job, FFMPEG(), args, path.dirname(src), line => { const t = ffTime(line); if (t !== null) report(t); });
-  if (code !== 0 || !fs.existsSync(out)) throw new Error("recadrage impossible");
+const AUDIO_EXTS = new Set([".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"]);
+const needsPost = p => !!(p.crop || p.speed !== 1 || p.mute || p.sizeMB);
+
+// Étape de finition, en un seul réencodage : recadrage (9:16, 1:1), vitesse, suppression du son,
+// et objectif de taille (débit calculé pour tenir sous X Mo, avec baisse de résolution si nécessaire).
+async function postProcess(job, src, { crop, cropPos, speed, mute, sizeMB, duration }, report) {
+  const ext = path.extname(src), audioOnly = AUDIO_EXTS.has(ext);
+  const outDur = Math.max(0.1, duration / speed);
+  const tags = [crop && CROP_TAGS[crop], speed !== 1 && `x${speed}`, mute && !audioOnly && "sans son"].filter(Boolean);
+  const out = src.slice(0, -ext.length) + (tags.length ? " " + tags.join(" ") : " final") + ext;
+  const args = ["-hide_banner", "-nostdin", "-y", "-i", src];
+  const atempo = speed !== 1 ? ["-af", `atempo=${speed}`] : [];
+
+  if (audioOnly) {
+    args.push("-vn", ...atempo, ...audioCodecArgs(ext));
+  } else {
+    const vf = [];
+    if (crop) {
+      const r = CROPS[crop], pos = cropPos.toFixed(4);
+      vf.push(`crop=w=trunc(min(iw\\,ih*${r})/2)*2:h=trunc(min(ih\\,iw/${r})/2)*2:x=(iw-ow)*${pos}:y=(ih-oh)*${pos}`);
+    }
+    if (speed !== 1) vf.push(`setpts=PTS/${speed}`);
+    let vcodec = videoCodecArgs(ext);
+    const aK = mute ? 0 : 96;
+    if (sizeMB) {
+      // Débit total visé (kbit/s) avec 7 % de marge pour l'enveloppe du fichier
+      const totalK = (sizeMB * 8 * 1024 * 0.93) / outDur;
+      const vK = Math.max(80, Math.floor(totalK - aK));
+      if (vK < 400) vf.push("scale=-2:'min(ih,480)'");
+      else if (vK < 1000) vf.push("scale=-2:'min(ih,720)'");
+      // Qualité normale mais débit PLAFONNÉ : un extrait simple reste petit, un extrait lourd ne dépasse pas la limite
+      if (ext === ".webm") vcodec = ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", `${vK}k`, "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1"];
+      else if (ext === ".avi") vcodec = ["-c:v", "mpeg4", "-q:v", "3", "-maxrate", `${vK}k`, "-bufsize", `${vK * 2}k`];
+      else vcodec = ["-c:v", "libx264", "-crf", "20", "-maxrate", `${vK}k`, "-bufsize", `${vK * 2}k`, "-preset", "veryfast", "-pix_fmt", "yuv420p"];
+    }
+    vf.push("scale=trunc(iw/2)*2:trunc(ih/2)*2"); // dimensions paires (exigé par H.264)
+    args.push("-vf", vf.join(","), ...vcodec);
+    if (mute) args.push("-an");
+    else if (speed !== 1 || sizeMB) {
+      const acodec = ext === ".webm" ? "libopus" : ext === ".avi" ? "libmp3lame" : "aac";
+      args.push(...atempo, "-c:a", acodec, "-b:a", sizeMB ? `${aK}k` : "192k");
+    } else args.push("-c:a", "copy");
+    if (ext === ".mp4" || ext === ".mov") args.push("-movflags", "+faststart");
+  }
+  args.push("-map_metadata", "0", out);
+  const code = await runTool(job, FFMPEG(), args, path.dirname(src), line => { const t = ffTime(line); if (t !== null) report(Math.min(1, t / outDur)); });
+  if (code !== 0 || !fs.existsSync(out)) throw new Error("finition impossible");
   fs.rmSync(src, { force: true });
   return out;
 }
@@ -623,6 +739,10 @@ async function startDownload(opts) {
   if (mode === "audio" && !info.hasAudio) return { error: "Cette vidéo n'a pas de son : impossible d'en faire un fichier audio." };
   const format = mode === "audio" ? (AUDIO_FORMATS[opts.format] ? opts.format : "mp3") : (VIDEO_FORMATS.has(opts.format) ? opts.format : "mp4");
   const quality = info.heights.includes(Number(opts.quality)) ? Number(opts.quality) : "auto";
+  const speed = SPEEDS.has(Number(opts.speed)) ? Number(opts.speed) : 1;
+  const mute = mode === "video" && !!opts.mute;
+  const sizeMB = mode === "video" && SIZE_TARGETS.has(Number(opts.sizeMB)) ? Number(opts.sizeMB) : 0;
+  const name = safeName(opts.name);
   if (!isDir(settings.downloadDir)) return { error: "Le dossier de destination n'existe plus. Choisis-en un autre." };
   if ([...jobs.values()].filter(j => j.status === "running").length >= MAX_PARALLEL) return { error: "Trop de téléchargements en cours. Attends qu'un se termine." };
 
@@ -633,15 +753,43 @@ async function startDownload(opts) {
   fs.mkdirSync(tempDir, { recursive: true });
   const job = { id: jobId, status: "running", percent: null, line: "Préparation…", files: [], error: null, lastSent: 0, tempDir, proc: null };
   jobs.set(jobId, job);
-  runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos }).catch(() => {});
+  runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos, speed, mute, sizeMB, name }).catch(() => {});
   return { id: jobId };
 }
 
-// Déroulé d'une tâche : chaque extrait (téléchargement + recadrage éventuel), assemblage éventuel, rangement.
-async function runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos }) {
+// Durée réelle d'un fichier produit (sert au calcul du débit pour l'objectif de taille).
+function fileDuration(file) {
+  return new Promise(resolve => execFile(path.join(FFMPEG_DIR, "ffprobe.exe"), ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file],
+    { env: CHILD_ENV, windowsHide: true, timeout: 15000 }, (err, out) => { const d = parseFloat(String(out).trim()); resolve(!err && d > 0 ? d : null); }));
+}
+
+// Barre des tâches Windows + notification quand l'appli n'est pas au premier plan
+function updateTaskbar() {
+  if (!mainWindow) return;
+  const running = [...jobs.values()].filter(j => j.status === "running");
+  if (running.length) mainWindow.setProgressBar(Math.min(1, Math.max(0.01, (running.at(-1).percent ?? 1) / 100)));
+  else mainWindow.setProgressBar(-1);
+}
+function notifyEnd(job) {
+  updateTaskbar();
+  if (job.status === "error" && mainWindow) {
+    mainWindow.setProgressBar(1, { mode: "error" });
+    setTimeout(updateTaskbar, 4000);
+  }
+  if (!mainWindow || mainWindow.isFocused() || !Notification.isSupported() || job.status === "cancelled") return;
+  const n = new Notification(job.status === "done"
+    ? { title: job.files.length > 1 ? `✓ ${job.files.length} fichiers téléchargés` : "✓ Téléchargement terminé", body: job.files.map(f => path.basename(f)).join("\n").slice(0, 200), icon: path.join(__dirname, "icon.png") }
+    : { title: "Échec du téléchargement", body: String(job.error || "").slice(0, 200), icon: path.join(__dirname, "icon.png") });
+  n.on("click", () => { if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } });
+  n.show();
+}
+
+// Déroulé d'une tâche : téléchargement de chaque extrait, assemblage éventuel, finition éventuelle, rangement.
+async function runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos, speed, mute, sizeMB, name }) {
   const n = segments.length, tempDir = job.tempDir;
-  // Répartition de la barre de progression : téléchargement 70 %, recadrage 25 %, assemblage 5 % (ajusté selon les étapes)
-  const wCrop = crop ? 0.3 : 0, wMerge = merge ? 0.05 : 0, wDl = 1 - wCrop - wMerge;
+  const post = { crop, cropPos, speed, mute, sizeMB };
+  // Répartition de la barre de progression selon les étapes prévues
+  const wCrop = needsPost(post) ? 0.3 : 0, wMerge = merge ? 0.05 : 0, wDl = 1 - wCrop - wMerge;
   const setP = (frac, line) => { job.percent = Math.min(99.5, Math.max(0, frac * 100)); if (line) job.line = line; sendProgress(job); };
   const prefix = i => (n > 1 ? `Extrait ${i + 1}/${n} — ` : "");
   let cookieFile = null;
@@ -652,7 +800,7 @@ async function runJob(job, { info, segments, duration, mode, format, quality, me
       const seg = segments[i], segLen = seg.end - seg.start;
       const segDir = path.join(tempDir, "seg-" + i);
       fs.mkdirSync(segDir, { recursive: true });
-      const { args, cut } = buildArgs({ url: info.url, start: seg.start, end: seg.end, duration, mode, format, quality, cookieFile }, segDir);
+      const { args, cut } = buildArgs({ url: info.url, start: seg.start, end: seg.end, duration, mode, format, quality, cookieFile, name }, segDir);
       const errLines = [];
       let file = null;
       const base = i / n;
@@ -668,24 +816,29 @@ async function runJob(job, { info, segments, duration, mode, format, quality, me
       if (job.status !== "running") break;
       const ok = code === 0 && file && path.dirname(path.resolve(file)) === path.resolve(segDir) && fs.existsSync(file);
       if (!ok) throw Object.assign(new Error(cleanError(errLines.join("\n")) || `Échec (code ${code}).`), { user: true });
-      if (crop) {
-        const cBase = wDl + (i / n) * wCrop;
-        setP(cBase, prefix(i) + "Recadrage " + crop + "…");
-        file = await cropFile(job, file, crop, cropPos, t => setP(cBase + Math.min(1, t / segLen) / n * wCrop));
-      }
       produced.push(file);
     }
     if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
 
     let results = produced;
     if (merge) {
-      setP(1 - wMerge, "Assemblage des extraits…");
+      setP(wDl, "Assemblage des extraits…");
       const ext = path.extname(produced[0]);
-      const title = path.basename(produced[0], ext).replace(/ \[[^\]]*\]( \dx\d+)?$/, "");
-      const tag = crop ? ` ${CROP_TAGS[crop]}` : "";
+      const title = path.basename(produced[0], ext).replace(/ \[[^\]]*\]$/, "");
       const total = segments.reduce((a, s) => a + (s.end - s.start), 0);
-      const out = path.join(tempDir, `${title} [${n} extraits]${tag}${ext}`);
-      results = [await concatFiles(job, produced, out, t => setP(1 - wMerge + Math.min(1, t / total) * wMerge))];
+      const out = path.join(tempDir, `${title} [${n} extraits]${ext}`);
+      results = [await concatFiles(job, produced, out, t => setP(wDl + Math.min(1, t / total) * wMerge))];
+    }
+    if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
+
+    if (needsPost(post)) {
+      const label = [crop && "recadrage " + crop, speed !== 1 && "vitesse ×" + String(speed).replace(".", ","), mute && "retrait du son", sizeMB && `taille < ${sizeMB} Mo`].filter(Boolean).join(", ");
+      for (let i = 0; i < results.length && job.status === "running"; i++) {
+        const pBase = wDl + wMerge + (i / results.length) * wCrop;
+        setP(pBase, (results.length > 1 ? `Fichier ${i + 1}/${results.length} — ` : "") + "Finition : " + label + "…");
+        const d = (await fileDuration(results[i])) || (merge ? segments.reduce((a, s) => a + (s.end - s.start), 0) : segments[i].end - segments[i].start);
+        results[i] = await postProcess(job, results[i], { ...post, duration: d }, f => setP(pBase + f * wCrop / results.length));
+      }
     }
     if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
 
@@ -693,7 +846,7 @@ async function runJob(job, { info, segments, duration, mode, format, quality, me
       for (const f of results) job.files.push(await finalizeFile(f, settings.downloadDir));
     } catch (e) { throw Object.assign(new Error("Impossible d'enregistrer le fichier dans le dossier choisi (" + e.code + ")."), { user: true }); }
     job.status = "done"; job.percent = 100; job.line = "Terminé !";
-    addHistory({ title: info.title, site: info.site, url: info.url, files: job.files, mode, format, crop, segments: segments.length, merged: merge });
+    addHistory({ title: info.title, site: info.site, url: info.url, files: job.files, mode, format, crop, segments: segments.length, merged: merge, speed, mute, sizeMB });
   } catch (e) {
     if (job.status === "cancelled" || e.cancelled) { job.status = "cancelled"; job.line = "Annulé."; }
     else { job.status = "error"; job.error = e.user ? e.message : "Erreur inattendue : " + e.message; }
@@ -702,6 +855,7 @@ async function runJob(job, { info, segments, duration, mode, format, quality, me
     dropFile(cookieFile);
     fs.rm(tempDir, { recursive: true, force: true }, () => {});
     sendProgress(job, true);
+    notifyEnd(job);
   }
 }
 
@@ -874,6 +1028,18 @@ app.on("web-contents-created", (_e, contents) => {
 // Rien n'est téléchargé sans l'accord de l'utilisateur ; l'empreinte SHA-512 de latest.yml est vérifiée.
 // ---------------------------------------------------------------------------
 let appUpdater = null;
+
+// « Quoi de neuf ? » : description de la release GitHub (HTML) convertie en texte brut.
+// Le résultat est affiché comme du texte (jamais interprété) : aucun code ne peut s'y glisser.
+function releaseNotesText(notes) {
+  let s = Array.isArray(notes) ? notes.map(n => n?.note || "").join("\n") : String(notes || "");
+  s = s.replace(/<\s*br\s*\/?>/gi, "\n").replace(/<\/(p|div|h\d|ul|ol)>/gi, "\n").replace(/<li[^>]*>/gi, "• ").replace(/<\/li>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&")
+    .replace(/^\s*[-*]\s+/gm, "• ").replace(/\*\*|__|`/g, "").replace(/^#+\s*/gm, "")
+    .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  return s.slice(0, 1500);
+}
 const sendUpdate = s => mainWindow?.webContents.send("app-update", s);
 function setupAppUpdater() {
   if (!app.isPackaged) return;
@@ -883,7 +1049,7 @@ function setupAppUpdater() {
   appUpdater.allowPrerelease = false;
   appUpdater.allowDowngrade = false;
   appUpdater.logger = null;
-  appUpdater.on("update-available", i => sendUpdate({ state: "available", version: String(i.version) }));
+  appUpdater.on("update-available", i => sendUpdate({ state: "available", version: String(i.version), notes: releaseNotesText(i.releaseNotes) }));
   appUpdater.on("download-progress", p => sendUpdate({ state: "downloading", percent: Math.round(p.percent || 0) }));
   appUpdater.on("update-downloaded", i => sendUpdate({ state: "ready", version: String(i.version) }));
   appUpdater.on("error", () => sendUpdate({ state: "error" }));
@@ -903,6 +1069,7 @@ if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
 
   app.enableSandbox();
 
+  app.setAppUserModelId("fr.leo.decoupeur-youtube"); // nécessaire aux notifications Windows
   app.whenReady().then(async () => {
     migrateOldData();
     settings = loadSettings();
@@ -967,7 +1134,24 @@ if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
     setImmediate(() => appUpdater?.quitAndInstall(false, true));
     return true;
   });
-  handle("get-settings", async () => { await ready; return { downloadDir: settings.downloadDir, ytdlp: await ytdlpVersion(), version: app.getVersion(), termsAccepted: termsAccepted() }; });
+  handle("get-settings", async () => { await ready; return { downloadDir: settings.downloadDir, ytdlp: await ytdlpVersion(), version: app.getVersion(), termsAccepted: termsAccepted(), prefs: settings.prefs || {} }; });
+  handle("save-prefs", p => { settings.prefs = { ...(settings.prefs || {}), ...sanitizePrefs(p) }; saveSettings(); return true; });
+  handle("frame-at", (token, t) => frameAt(token, t));
+  // Glisser un fichier téléchargé vers un autre logiciel (CapCut, DaVinci, Discord…)
+  ipcMain.on("start-drag", (event, id, index) => {
+    if (!trusted(event)) return;
+    const job = jobs.get(String(id));
+    const f = job?.status === "done" && job.files[Number(index) || 0];
+    if (!f || !fs.existsSync(f)) return;
+    const icon = nativeImage.createFromPath(path.join(__dirname, "icon.png")).resize({ width: 48, height: 48 });
+    event.sender.startDrag({ file: f, icon });
+  });
+  handle("open-file", id => {
+    const job = jobs.get(String(id));
+    const f = job?.status === "done" && job.files.find(p => fs.existsSync(p));
+    if (f) shell.openPath(f);
+    return !!f;
+  });
   handle("terms-state", () => termsAccepted());
   handle("accept-terms", () => { settings.terms = { version: TERMS_VERSION, acceptedAt: new Date().toISOString() }; saveSettings(); return true; });
   handle("refuse-terms", () => { app.quit(); return true; });
