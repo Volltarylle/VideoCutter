@@ -7,6 +7,9 @@ const path = require("path");
 const fs = require("fs");
 const { spawn, execFile } = require("child_process");
 
+// Développement uniquement : dossier de réglages séparé pour tester sans toucher à l'appli installée
+if (!app.isPackaged && process.env.VIDEOCUTTER_USERDATA) app.setPath("userData", process.env.VIDEOCUTTER_USERDATA);
+
 // ---------------------------------------------------------------------------
 // Constantes et chemins
 // ---------------------------------------------------------------------------
@@ -39,7 +42,7 @@ const AUDIO_FORMATS = {
   ogg:  { codec: "vorbis", thumb: true },
   opus: { codec: "opus",   thumb: true },
 };
-const VIDEO_FORMATS = new Set(["mp4", "mkv", "webm", "mov", "avi"]);
+const VIDEO_FORMATS = new Set(["mp4", "mkv", "webm", "mov", "avi", "gif"]);
 
 // Options communes : on ignore toute configuration/plugin externe à l'appli,
 // et yt-dlp utilise le moteur Node intégré à Electron pour les défis JS de YouTube.
@@ -112,7 +115,7 @@ function sanitizePrefs(p) {
   if (!p || typeof p !== "object") return {};
   const out = {};
   if (p.mode === "video" || p.mode === "audio") out.mode = p.mode;
-  if (["mp4", "mkv", "webm", "mov", "avi"].includes(p.vFormat)) out.vFormat = p.vFormat;
+  if (["mp4", "mkv", "webm", "mov", "avi", "gif"].includes(p.vFormat)) out.vFormat = p.vFormat;
   if (["mp3", "wav", "flac", "m4a", "ogg", "opus"].includes(p.aFormat)) out.aFormat = p.aFormat;
   if (["", "9:16", "1:1"].includes(p.crop)) out.crop = p.crop;
   if ([0.5, 0.75, 1, 1.25, 1.5, 2].includes(p.speed)) out.speed = p.speed;
@@ -589,6 +592,8 @@ function buildArgs({ url, start, end, duration, mode, format, quality, cookieFil
     if (format === "webm") args.push("-S", `${res},vcodec:vp9,acodec:opus`, "--merge-output-format", "webm/mkv", "--recode-video", "webm");
     else if (format === "avi") args.push("-S", `${res},vcodec:h264,acodec:aac`, "--merge-output-format", "mp4", "--recode-video", "avi");
     else if (format === "mkv") args.push("-S", res, "--merge-output-format", "mkv");
+    // GIF : on télécharge seulement l'image (pas le son) en 480p max, puis FFmpeg la convertit (voir postProcess)
+    else if (format === "gif") args.push("-f", "bv*/b", "-S", "res:720,vcodec:h264", "--merge-output-format", "mp4");
     else args.push("-S", `${res},vcodec:h264,acodec:aac`, "--merge-output-format", format);
   }
   if (cookieFile) args.push("--cookies", cookieFile);
@@ -649,13 +654,34 @@ function audioCodecArgs(ext) {
 const FFMPEG = () => path.join(FFMPEG_DIR, "ffmpeg.exe");
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"]);
-const needsPost = p => !!(p.crop || p.speed !== 1 || p.mute || p.sizeMB);
+const needsPost = p => !!(p.gif || p.crop || p.speed !== 1 || p.mute || p.sizeMB);
+
+// Filtre de recadrage 9:16 / 1:1 à la position choisie (0 = gauche/haut, 1 = droite/bas)
+const cropFilter = (crop, cropPos) => {
+  const r = CROPS[crop], pos = cropPos.toFixed(4);
+  return `crop=w=trunc(min(iw\\,ih*${r})/2)*2:h=trunc(min(ih\\,iw/${r})/2)*2:x=(iw-ow)*${pos}:y=(ih-oh)*${pos}`;
+};
 
 // Étape de finition, en un seul réencodage : recadrage (9:16, 1:1), vitesse, suppression du son,
 // et objectif de taille (débit calculé pour tenir sous X Mo, avec baisse de résolution si nécessaire).
-async function postProcess(job, src, { crop, cropPos, speed, mute, sizeMB, duration }, report) {
+async function postProcess(job, src, { gif, crop, cropPos, speed, mute, sizeMB, duration }, report) {
   const ext = path.extname(src), audioOnly = AUDIO_EXTS.has(ext);
   const outDur = Math.max(0.1, duration / speed);
+
+  // GIF : 12 images/s, 480 px de large maxi, palette de couleurs calculée pour cette vidéo
+  if (gif) {
+    const vf = [crop && cropFilter(crop, cropPos), speed !== 1 && `setpts=PTS/${speed}`,
+      // Le plus grand côté est limité à 480 px (paysage, vertical ou carré)
+      "fps=12", "scale='if(gte(iw,ih),min(iw,480),-2)':'if(gte(iw,ih),-2,min(ih,480))':flags=lanczos",
+      "split[a][b];[a]palettegen=max_colors=192:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle"].filter(Boolean);
+    const tags = [crop && CROP_TAGS[crop], speed !== 1 && `x${speed}`].filter(Boolean);
+    const out = src.slice(0, -ext.length) + (tags.length ? " " + tags.join(" ") : "") + ".gif";
+    const code = await runTool(job, FFMPEG(), ["-hide_banner", "-nostdin", "-y", "-i", src, "-an", "-vf", vf.join(","), "-loop", "0", out],
+      path.dirname(src), line => { const t = ffTime(line); if (t !== null) report(Math.min(1, t / outDur)); });
+    if (code !== 0 || !fs.existsSync(out)) throw new Error("conversion en GIF impossible");
+    fs.rmSync(src, { force: true });
+    return out;
+  }
   const tags = [crop && CROP_TAGS[crop], speed !== 1 && `x${speed}`, mute && !audioOnly && "sans son"].filter(Boolean);
   const out = src.slice(0, -ext.length) + (tags.length ? " " + tags.join(" ") : " final") + ext;
   const args = ["-hide_banner", "-nostdin", "-y", "-i", src];
@@ -665,10 +691,7 @@ async function postProcess(job, src, { crop, cropPos, speed, mute, sizeMB, durat
     args.push("-vn", ...atempo, ...audioCodecArgs(ext));
   } else {
     const vf = [];
-    if (crop) {
-      const r = CROPS[crop], pos = cropPos.toFixed(4);
-      vf.push(`crop=w=trunc(min(iw\\,ih*${r})/2)*2:h=trunc(min(ih\\,iw/${r})/2)*2:x=(iw-ow)*${pos}:y=(ih-oh)*${pos}`);
-    }
+    if (crop) vf.push(cropFilter(crop, cropPos));
     if (speed !== 1) vf.push(`setpts=PTS/${speed}`);
     let vcodec = videoCodecArgs(ext);
     const aK = mute ? 0 : 96;
@@ -740,8 +763,9 @@ async function startDownload(opts) {
   const format = mode === "audio" ? (AUDIO_FORMATS[opts.format] ? opts.format : "mp3") : (VIDEO_FORMATS.has(opts.format) ? opts.format : "mp4");
   const quality = info.heights.includes(Number(opts.quality)) ? Number(opts.quality) : "auto";
   const speed = SPEEDS.has(Number(opts.speed)) ? Number(opts.speed) : 1;
-  const mute = mode === "video" && !!opts.mute;
-  const sizeMB = mode === "video" && SIZE_TARGETS.has(Number(opts.sizeMB)) ? Number(opts.sizeMB) : 0;
+  const gif = mode === "video" && format === "gif";
+  const mute = mode === "video" && !gif && !!opts.mute;
+  const sizeMB = mode === "video" && !gif && SIZE_TARGETS.has(Number(opts.sizeMB)) ? Number(opts.sizeMB) : 0;
   const name = safeName(opts.name);
   if (!isDir(settings.downloadDir)) return { error: "Le dossier de destination n'existe plus. Choisis-en un autre." };
   if ([...jobs.values()].filter(j => j.status === "running").length >= MAX_PARALLEL) return { error: "Trop de téléchargements en cours. Attends qu'un se termine." };
@@ -787,7 +811,7 @@ function notifyEnd(job) {
 // Déroulé d'une tâche : téléchargement de chaque extrait, assemblage éventuel, finition éventuelle, rangement.
 async function runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos, speed, mute, sizeMB, name }) {
   const n = segments.length, tempDir = job.tempDir;
-  const post = { crop, cropPos, speed, mute, sizeMB };
+  const post = { gif: format === "gif", crop, cropPos, speed, mute, sizeMB };
   // Répartition de la barre de progression selon les étapes prévues
   const wCrop = needsPost(post) ? 0.3 : 0, wMerge = merge ? 0.05 : 0, wDl = 1 - wCrop - wMerge;
   const setP = (frac, line) => { job.percent = Math.min(99.5, Math.max(0, frac * 100)); if (line) job.line = line; sendProgress(job); };
@@ -832,7 +856,7 @@ async function runJob(job, { info, segments, duration, mode, format, quality, me
     if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
 
     if (needsPost(post)) {
-      const label = [crop && "recadrage " + crop, speed !== 1 && "vitesse ×" + String(speed).replace(".", ","), mute && "retrait du son", sizeMB && `taille < ${sizeMB} Mo`].filter(Boolean).join(", ");
+      const label = [post.gif && "conversion en GIF", crop && "recadrage " + crop, speed !== 1 && "vitesse ×" + String(speed).replace(".", ","), mute && "retrait du son", sizeMB && `taille < ${sizeMB} Mo`].filter(Boolean).join(", ");
       for (let i = 0; i < results.length && job.status === "running"; i++) {
         const pBase = wDl + wMerge + (i / results.length) * wCrop;
         setP(pBase, (results.length > 1 ? `Fichier ${i + 1}/${results.length} — ` : "") + "Finition : " + label + "…");

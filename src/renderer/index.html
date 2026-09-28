@@ -94,7 +94,7 @@
     <img src="icon.png" alt="" width="40" height="40">
     <div>
       <h1>VideoCutter</h1>
-      <p class="sub">YouTube, X, Instagram, TikTok, Dailymotion, Vimeo… colle un lien, choisis le passage, télécharge seulement ce morceau.</p>
+      <p class="sub">Colle un lien, garde seulement le passage qui t'intéresse.</p>
     </div>
   </header>
 
@@ -181,7 +181,14 @@
     </section>
 
     <section class="card" id="cutCard">
-      <h2>Passage à garder</h2>
+      <div class="row between card-head">
+        <h2>Passage</h2>
+        <span class="zoom-ctl">
+          <button type="button" id="zoomOut" class="icon-btn" title="Dézoomer">−</button>
+          <span id="zoomLabel">×1</span>
+          <button type="button" id="zoomIn" class="icon-btn" title="Zoomer sur le passage choisi">+</button>
+        </span>
+      </div>
       <div class="timeline">
         <div class="track"></div>
         <div class="range" id="range"></div>
@@ -189,15 +196,7 @@
         <input type="range" id="startR" min="0" step="0.1" aria-label="Début">
         <input type="range" id="endR" min="0" step="0.1" aria-label="Fin">
       </div>
-      <div class="ticks">
-        <span id="viewStartLabel">0:00</span>
-        <span class="zoom-ctl">
-          <button type="button" id="zoomOut" class="small" title="Dézoomer">−</button>
-          <span id="zoomLabel">Zoom ×1</span>
-          <button type="button" id="zoomIn" class="small" title="Zoomer sur le passage choisi">+</button>
-        </span>
-        <span id="durLabel"></span>
-      </div>
+      <div class="ticks"><span id="viewStartLabel">0:00</span><span id="durLabel"></span></div>
       <div class="frames" id="frames" hidden>
         <figure><div class="frame-box"><img id="frameStart" alt=""></div><figcaption>Début · <span id="frameStartT"></span></figcaption></figure>
         <figure><div class="frame-box"><img id="frameEnd" alt=""></div><figcaption>Fin · <span id="frameEndT"></span></figcaption></figure>
@@ -208,29 +207,26 @@
           <label for="startT">Début</label>
           <div class="row">
             <input id="startT" type="text" spellcheck="false">
-            <button type="button" id="setStart" title="Prendre la position actuelle de la vidéo">⤓ Position actuelle</button>
+            <button type="button" id="setStart" class="icon-btn" title="Prendre la position actuelle de la vidéo (touche I)">⤓</button>
           </div>
         </div>
         <div class="time">
           <label for="endT">Fin</label>
           <div class="row">
             <input id="endT" type="text" spellcheck="false">
-            <button type="button" id="setEnd" title="Prendre la position actuelle de la vidéo">⤓ Position actuelle</button>
+            <button type="button" id="setEnd" class="icon-btn" title="Prendre la position actuelle de la vidéo (touche O)">⤓</button>
           </div>
         </div>
       </div>
 
       <div class="clipinfo">
-        <span class="len">Durée de l'extrait : <b id="clipLen"></b></span>
-        <div class="row">
-          <button type="button" id="preview">▶ Écouter l'extrait</button>
-          <button type="button" id="reset">Tout garder</button>
+        <span class="len">Durée <b id="clipLen"></b></span>
+        <div class="row tools">
+          <button type="button" id="preview" title="Écouter l'extrait (touche P)">▶ Écouter</button>
+          <button type="button" id="reset" title="Garder toute la vidéo">↺ Tout</button>
+          <button type="button" id="addSeg" title="Ajouter ce passage à la liste, pour télécharger plusieurs passages d'un coup (touche A)">＋ Liste</button>
+          <button type="button" id="keysBtn" class="icon-btn" title="Raccourcis clavier (touche ?)">⌨</button>
         </div>
-      </div>
-
-      <div class="row mt">
-        <button type="button" id="addSeg">➕ Ajouter à la liste</button>
-        <span class="note small">pour télécharger plusieurs passages d'un coup</span>
       </div>
       <div id="segBox" hidden>
         <h2 class="mt">Extraits à télécharger (<span id="segCount"></span>)</h2>
@@ -241,12 +237,9 @@
           <button type="button" id="segClear" class="small">Vider la liste</button>
         </div>
       </div>
-
-      <button type="button" id="keysBtn" class="small mt">⌨️ Raccourcis clavier</button>
     </section>
 
     <section class="card">
-      <h2>Format</h2>
       <div class="row">
         <div class="seg" id="modeSeg">
           <button type="button" data-mode="video" class="on">🎬 Vidéo</button>
@@ -258,6 +251,7 @@
           <option value="webm">WEBM</option>
           <option value="mov">MOV</option>
           <option value="avi">AVI</option>
+          <option value="gif">GIF</option>
         </select>
         <select id="aFormat" aria-label="Format audio" hidden>
           <option value="mp3" selected>MP3</option>
@@ -271,52 +265,58 @@
           <option value="auto" selected>Auto</option>
         </select>
       </div>
-      <div class="row mt" id="cropRow">
-        <span class="note">Cadrage :</span>
-        <div class="seg" id="cropSeg">
-          <button type="button" data-crop="" class="on">Original</button>
-          <button type="button" data-crop="9:16">📱 Vertical 9:16</button>
-          <button type="button" data-crop="1:1">⬛ Carré 1:1</button>
+      <p class="note small mt" id="gifNote" hidden>GIF : sans son, 480 px maximum, 12 images/s. Idéal pour moins de 15 secondes.</p>
+
+      <details class="options" id="optBox">
+        <summary>Options <span class="opt-summary" id="optSummary"></span></summary>
+        <div class="opt-list">
+          <div class="opt" id="cropRow">
+            <span class="opt-label">Cadrage</span>
+            <div class="seg" id="cropSeg">
+              <button type="button" data-crop="" class="on">Original</button>
+              <button type="button" data-crop="9:16" title="Reels, TikTok, Shorts">Vertical 9:16</button>
+              <button type="button" data-crop="1:1">Carré 1:1</button>
+            </div>
+          </div>
+          <p class="note small" id="cropNote" hidden>Déplace le cadre violet sur l'aperçu pour choisir la zone gardée.</p>
+          <div class="opt">
+            <span class="opt-label">Vitesse</span>
+            <select id="speed" aria-label="Vitesse">
+              <option value="0.5">×0,5 (ralenti)</option>
+              <option value="0.75">×0,75</option>
+              <option value="1" selected>×1 (normale)</option>
+              <option value="1.25">×1,25</option>
+              <option value="1.5">×1,5</option>
+              <option value="2">×2 (accéléré)</option>
+            </select>
+          </div>
+          <div class="opt" id="sizeRow">
+            <span class="opt-label">Taille maxi</span>
+            <select id="sizeMB" aria-label="Taille maximale du fichier">
+              <option value="0" selected>Libre</option>
+              <option value="10">10 Mo (Discord)</option>
+              <option value="25">25 Mo (e-mail)</option>
+              <option value="50">50 Mo</option>
+            </select>
+          </div>
+          <div class="opt" id="muteRow">
+            <span class="opt-label">Son</span>
+            <label class="check-inline"><input type="checkbox" id="mute"> Retirer le son</label>
+          </div>
         </div>
-      </div>
-      <p class="note mt" id="cropNote" hidden>Déplace le cadre violet sur l'aperçu pour choisir la zone gardée (Reels, TikTok, Shorts…).
-        Le recadrage réencode la vidéo : le téléchargement prend un peu plus de temps.</p>
-      <div class="row mt">
-        <label class="inline">Vitesse
-          <select id="speed" aria-label="Vitesse">
-            <option value="0.5">×0,5 (ralenti)</option>
-            <option value="0.75">×0,75</option>
-            <option value="1" selected>×1 (normale)</option>
-            <option value="1.25">×1,25</option>
-            <option value="1.5">×1,5</option>
-            <option value="2">×2 (accéléré)</option>
-          </select>
-        </label>
-        <label class="inline" id="sizeRow">Taille maxi
-          <select id="sizeMB" aria-label="Taille maximale du fichier">
-            <option value="0" selected>Libre</option>
-            <option value="10">10 Mo (Discord)</option>
-            <option value="25">25 Mo (e-mail)</option>
-            <option value="50">50 Mo</option>
-          </select>
-        </label>
-        <label class="check-inline" id="muteRow"><input type="checkbox" id="mute"> Sans le son</label>
-      </div>
-      <p class="note mt">Taille estimée : <b id="sizeEst">—</b></p>
+      </details>
     </section>
 
     <section class="card">
-      <div class="name-row">
-        <label for="fileName">Nom du fichier</label>
-        <div class="row">
-          <input id="fileName" type="text" spellcheck="false" placeholder="Nom du fichier">
-          <label class="check-inline" title="Retire les emojis, hashtags, @pseudos et « … » du titre"><input type="checkbox" id="cleanNames" checked> Nettoyer le nom</label>
-        </div>
+      <div class="row name-row">
+        <input id="fileName" type="text" spellcheck="false" placeholder="Nom du fichier" title="Nom du fichier">
+        <label class="check-inline small" title="Retire les emojis, hashtags, @pseudos et « … » du titre"><input type="checkbox" id="cleanNames" checked> Nettoyer</label>
       </div>
       <div class="row dl-row">
         <button class="primary big" id="dlBtn" type="button">Télécharger l'extrait</button>
-        <button type="button" id="queueAdd" title="Mettre ce téléchargement en file d'attente">➕ File d'attente</button>
+        <button type="button" id="queueAdd" class="icon-btn big-icon" title="Ajouter à la file d'attente (téléchargée plus tard)">＋</button>
       </div>
+      <p class="est">Taille estimée <b id="sizeEst">—</b></p>
       <div id="progress" hidden>
         <div class="bar indet" id="bar"><div></div></div>
         <div class="row between">
@@ -325,7 +325,6 @@
         </div>
         <div id="result" hidden>
           <div class="done" id="doneText">✓ Fichier enregistré</div>
-          <p class="note small">Astuce : glisse le fichier ci-dessous directement dans ton logiciel de montage, Discord, etc.</p>
           <ul class="file-list" id="fileList"></ul>
           <div class="row">
             <button type="button" id="openFile">▶ Ouvrir</button>
@@ -384,8 +383,21 @@
 
   <footer>
     <div class="row between">
-      <span>Dossier : <a href="#" id="folderLink"></a> · <a href="#" id="changeFolder">changer</a> · <a href="#" id="loginLink">🔑 Connexions</a> · <a href="#" id="historyLink">🕘 Historique</a> · <a href="#" id="queueLink">📋 File d'attente <span id="queueBadge"></span></a></span>
-      <span>yt-dlp <span id="ytVer">…</span> · <a href="#" id="updateLink">mettre à jour</a> · <a href="#" id="termsLink">Conditions</a> · <a href="#" id="aboutLink">Licences</a></span>
+      <span class="folder" title="Dossier où sont enregistrés les fichiers">📁 <a href="#" id="folderLink"></a> · <a href="#" id="changeFolder">changer</a></span>
+      <span class="foot-icons">
+        <a href="#" id="historyLink" title="Historique">🕘</a>
+        <a href="#" id="queueLink" title="File d'attente">📋<span id="queueBadge"></span></a>
+        <a href="#" id="loginLink" title="Connexions aux sites">🔑</a>
+        <span class="more">
+          <a href="#" id="moreLink" title="Plus">⋯</a>
+          <div class="menu" id="moreMenu" hidden>
+            <div class="menu-info">yt-dlp <span id="ytVer">…</span></div>
+            <a href="#" id="updateLink">Mettre à jour yt-dlp</a>
+            <a href="#" id="termsLink">Conditions d'utilisation</a>
+            <a href="#" id="aboutLink">Licences</a>
+          </div>
+        </span>
+      </span>
     </div>
   </footer>
 </main>

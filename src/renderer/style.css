@@ -92,14 +92,24 @@ h2 { font-size: 15px; margin: 0 0 12px; }
 footer { color: var(--muted); font-size: 13px; padding: 4px 4px 0; }
 footer #folderLink { word-break: break-all; }
 
+/* Version épurée : boutons-icônes, en-têtes de carte compacts */
+.icon-btn { padding: 6px 11px; min-width: 38px; line-height: 1.2; }
+.card-head { margin-bottom: 4px; }
+.card-head h2 { margin: 0; }
+.clipinfo .tools { gap: 6px; }
+.clipinfo .tools button { padding: 7px 12px; font-size: 14px; }
+
 /* Zoom de la barre de découpe */
 .ticks { align-items: center; }
-.zoom-ctl { display: inline-flex; align-items: center; gap: 6px; }
-.zoom-ctl button { padding: 1px 10px; font-size: 14px; line-height: 1.4; }
-.zoom-ctl span { min-width: 64px; text-align: center; }
+.zoom-ctl { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.zoom-ctl .icon-btn { padding: 2px 10px; min-width: 30px; font-size: 15px; }
+.zoom-ctl span { min-width: 28px; text-align: center; font-variant-numeric: tabular-nums; }
 
-/* Miniatures du début et de la fin */
+/* Miniatures du début et de la fin (compactes) */
+/* Alignées sur les colonnes Début / Fin juste en dessous : pas besoin de légende */
 .frames { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+.frames figure { max-width: 220px; }
+.frames figcaption { display: none; }
 .frames figure { margin: 0; }
 .frame-box { aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; display: grid; place-items: center; }
 .frame-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
@@ -113,12 +123,42 @@ label.inline { display: inline-flex; align-items: center; gap: 8px; color: var(-
 .check-inline input { width: 16px; height: 16px; accent-color: var(--accent); }
 #sizeEst { color: var(--text); }
 
+/* Bloc « Options » repliable */
+.options { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+.options summary { cursor: pointer; color: var(--muted); font-size: 14px; list-style: none; user-select: none; }
+.options summary::-webkit-details-marker { display: none; }
+.options summary::before { content: "▸"; display: inline-block; width: 16px; transition: transform .15s; }
+.options[open] summary::before { transform: rotate(90deg); }
+.options summary:hover { color: var(--text); }
+.opt-summary { color: var(--accent-ink); font-weight: 600; margin-left: 6px; }
+.opt-list { display: grid; gap: 10px; margin-top: 12px; }
+.opt { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.opt-label { width: 90px; color: var(--muted); font-size: 14px; }
+.opt .seg button { padding: 8px 14px; font-size: 14px; }
+.opt select { padding: 8px 12px; }
+
 /* Nom du fichier + boutons de téléchargement */
-.name-row { margin-bottom: 14px; }
-.name-row label[for] { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.name-row { margin-bottom: 12px; flex-wrap: nowrap; }
+.name-row input { flex: 1; }
+.check-inline.small { font-size: 13px; color: var(--muted); }
 .dl-row { flex-wrap: nowrap; }
 .dl-row .big { flex: 1; width: auto; }
-.dl-row #queueAdd { white-space: nowrap; align-self: stretch; }
+.dl-row .big-icon { align-self: stretch; font-size: 20px; min-width: 52px; }
+.est { margin: 8px 2px 0; color: var(--muted); font-size: 13px; }
+
+/* Pied de page épuré : dossier à gauche, icônes + menu à droite */
+footer .folder { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 70%; }
+.foot-icons { display: inline-flex; align-items: center; gap: 4px; }
+.foot-icons > a, .more > a { display: inline-flex; align-items: center; justify-content: center; min-width: 34px; height: 30px;
+  padding: 0 6px; border-radius: 8px; font-size: 16px; text-decoration: none; color: var(--text); }
+.foot-icons > a:hover, .more > a:hover { background: var(--accent-soft); text-decoration: none; }
+#queueBadge { font-size: 12px; margin-left: 2px; color: var(--accent-ink); }
+.more { position: relative; }
+.menu { position: absolute; right: 0; bottom: 36px; z-index: 20; min-width: 220px; padding: 6px; border-radius: 12px;
+  background: var(--card); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+.menu a { display: block; padding: 8px 10px; border-radius: 8px; color: var(--text); font-size: 14px; }
+.menu a:hover { background: var(--accent-soft); text-decoration: none; }
+.menu-info { padding: 6px 10px 8px; color: var(--muted); font-size: 12.5px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 
 /* Fichiers terminés, à glisser vers un autre logiciel */
 .file-list { list-style: none; margin: 6px 0 12px; padding: 0; display: grid; gap: 6px; }

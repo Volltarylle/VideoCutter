@@ -113,7 +113,7 @@ function setView(center) {
   for (const r of [$("startR"), $("endR")]) { r.min = view.start; r.max = view.end; }
   $("viewStartLabel").textContent = fmt(view.start).replace(/\.\d$/, "");
   $("durLabel").textContent = fmt(view.end).replace(/\.\d$/, "");
-  $("zoomLabel").textContent = "Zoom ×" + ZOOMS[zoomIdx];
+  $("zoomLabel").textContent = "×" + ZOOMS[zoomIdx];
   $("zoomOut").disabled = zoomIdx === 0;
   $("zoomIn").disabled = zoomIdx === ZOOMS.length - 1 || d / ZOOMS[zoomIdx + 1] < 2;
   drawRange();
@@ -270,18 +270,44 @@ $("preview").onclick = () => { player.seek(info.start); player.play(); previewSt
 // ---------------------------------------------------------------------------
 // Format
 // ---------------------------------------------------------------------------
+const isGif = () => mode === "video" && $("vFormat").value === "gif";
+// Affiche seulement les réglages qui ont du sens pour le mode et le format choisis
+function updateFormatUI() {
+  const video = mode === "video", gif = isGif();
+  $("vFormat").hidden = !video;
+  $("aFormat").hidden = video;
+  $("quality").hidden = !video || gif;          // le GIF est toujours en 480 px
+  $("cropRow").hidden = !video;
+  $("muteRow").hidden = $("sizeRow").hidden = !video || gif; // un GIF n'a pas de son ; taille réglée par la largeur
+  $("gifNote").hidden = !gif;
+  updateCropUI();
+  updateOptSummary();
+}
+// Résumé des options actives, visible même quand le bloc « Options » est replié
+function updateOptSummary() {
+  const video = mode === "video", gif = isGif(), sp = Number($("speed").value);
+  const parts = [
+    video && crop, sp !== 1 && "×" + String(sp).replace(".", ","),
+    video && !gif && $("mute").checked && "sans son",
+    video && !gif && Number($("sizeMB").value) && "≤ " + $("sizeMB").value + " Mo",
+  ].filter(Boolean);
+  $("optSummary").textContent = parts.length ? "· " + parts.join(" · ") : "";
+}
 $("modeSeg").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b || b.disabled) return;
   mode = b.dataset.mode;
   for (const x of $("modeSeg").children) x.classList.toggle("on", x === b);
-  $("quality").hidden = $("vFormat").hidden = mode !== "video";
-  $("aFormat").hidden = mode !== "audio";
-  $("cropRow").hidden = mode !== "video";
-  $("muteRow").hidden = $("sizeRow").hidden = mode !== "video";
-  updateCropUI();
+  updateFormatUI();
   updateEstimate();
   savePrefs();
 });
+for (const id of ["vFormat", "speed", "sizeMB", "mute"]) $(id).addEventListener("change", updateFormatUI);
+
+// Menu « ⋯ » du pied de page
+$("moreLink").onclick = e => { e.preventDefault(); e.stopPropagation(); $("moreMenu").hidden = !$("moreMenu").hidden; };
+document.addEventListener("click", e => { if (!$("moreMenu").hidden && !e.target.closest(".more")) $("moreMenu").hidden = true; });
+document.addEventListener("keydown", e => { if (e.key === "Escape") $("moreMenu").hidden = true; });
+for (const id of ["termsLink", "aboutLink"]) $(id).addEventListener("click", () => { $("moreMenu").hidden = true; });
 
 // ---------------------------------------------------------------------------
 // Recadrage 9:16 / 1:1 : cadre déplaçable sur l'aperçu
@@ -293,6 +319,7 @@ $("cropSeg").addEventListener("click", e => {
   crop = b.dataset.crop;
   for (const x of $("cropSeg").children) x.classList.toggle("on", x === b);
   updateCropUI();
+  updateOptSummary();
   updateEstimate();
   savePrefs();
 });
@@ -445,6 +472,7 @@ function updateEstimate() {
   if (!total) { out.textContent = "inconnue (durée non fournie par le site)"; return; }
   let kbps;
   if (mode === "audio") kbps = AUDIO_KBPS[$("aFormat").value] || 192;
+  else if (isGif()) kbps = 5500 * (crop === "1:1" ? 1.6 : 1); // mesuré : GIF 480 px / 12 i/s ≈ 680 Ko par seconde (carré 480×480 : plus lourd)
   else {
     const hs = info.heights || [], q = $("quality").value;
     const h = q === "auto" ? hs[0] : Number(q);
@@ -454,7 +482,7 @@ function updateEstimate() {
     kbps = vk * area + ($("mute").checked ? 0 : info.rates.audio || 128);
   }
   let bytes = (kbps * 1000 / 8) * total;
-  const target = mode === "video" ? Number($("sizeMB").value) * 1024 * 1024 : 0;
+  const target = mode === "video" && !isGif() ? Number($("sizeMB").value) * 1024 * 1024 : 0;
   const files = segments.length > 1 && document.querySelector("input[name=merge]:checked")?.value !== "1" ? segments.length : 1;
   if (target) bytes = Math.min(bytes, target * files);
   out.textContent = "≈ " + humanSize(bytes) + (files > 1 ? ` au total (${files} fichiers)` : "") + (target ? ` · maxi ${$("sizeMB").value} Mo par fichier` : "");
@@ -485,6 +513,7 @@ function applyPrefs(p) {
   if (typeof p.merge === "boolean") document.querySelector(`input[name=merge][value="${p.merge ? 1 : 0}"]`).checked = true;
   if (p.crop !== undefined) $("cropSeg").querySelector(`[data-crop="${p.crop}"]`)?.click();
   if (p.mode) $("modeSeg").querySelector(`[data-mode="${p.mode}"]`)?.click();
+  updateFormatUI();
   prefsReady = true;
 }
 
@@ -494,8 +523,8 @@ function currentOpts() {
     mode, format: mode === "audio" ? $("aFormat").value : $("vFormat").value, quality: $("quality").value,
     merge: document.querySelector("input[name=merge]:checked")?.value === "1",
     crop: mode === "video" ? crop : "", cropPos,
-    speed: Number($("speed").value) || 1, mute: mode === "video" && $("mute").checked,
-    sizeMB: mode === "video" ? Number($("sizeMB").value) : 0,
+    speed: Number($("speed").value) || 1, mute: mode === "video" && !isGif() && $("mute").checked,
+    sizeMB: mode === "video" && !isGif() ? Number($("sizeMB").value) : 0,
   };
 }
 
@@ -580,7 +609,7 @@ $("updateLink").onclick = async e => {
     : r.error ? "échec de la mise à jour"
     : r.updated ? "mis à jour ✓" : "déjà à jour ✓";
   refreshSettings();
-  setTimeout(() => { link.textContent = "mettre à jour"; }, 4000);
+  setTimeout(() => { link.textContent = "Mettre à jour yt-dlp"; }, 4000);
 };
 api.onYtdlpUpdated(() => refreshSettings());
 refreshSettings();

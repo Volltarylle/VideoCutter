@@ -17,7 +17,7 @@
 2. Tu choisis le début et la fin de l'extrait, avec un aperçu de la vidéo.
 3. Tu choisis le format, et seul ce morceau est téléchargé.
 
-**Formats** — Vidéo : MP4, MKV, WEBM, MOV, AVI · Musique : MP3, WAV, FLAC, M4A, OGG, OPUS
+**Formats** — Vidéo : MP4, MKV, WEBM, MOV, AVI, **GIF** · Musique : MP3, WAV, FLAC, M4A, OGG, OPUS
 **Qualité** — « Auto » prend la meilleure qualité disponible ; le menu ne propose que les qualités qui existent pour la vidéo.
 
 **Découpe** — aperçu, miniatures du début et de la fin, zoom sur la barre de découpe, plusieurs extraits d'un coup (fichiers séparés ou recollés), raccourcis clavier (`I`, `O`, `Espace`, flèches…).
