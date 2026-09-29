@@ -20,9 +20,10 @@
 **Formats** — Vidéo : MP4, MKV, WEBM, MOV, AVI, **GIF** · Musique : MP3, WAV, FLAC, M4A, OGG, OPUS
 **Qualité** — « Auto » prend la meilleure qualité disponible ; le menu ne propose que les qualités qui existent pour la vidéo.
 
-**Découpe** — aperçu, miniatures du début et de la fin, zoom sur la barre de découpe, plusieurs extraits d'un coup (fichiers séparés ou recollés), raccourcis clavier (`I`, `O`, `Espace`, flèches…).
-**Export** — recadrage vertical 9:16 ou carré 1:1, vitesse (×0,5 à ×2), vidéo sans le son, taille maximale (10, 25 ou 50 Mo), taille estimée avant le téléchargement, nom de fichier modifiable et nettoyé (emojis, #, @).
-**Confort** — file d'attente, historique, lien du presse-papiers proposé automatiquement, glisser-déposer d'un lien, glisser le fichier terminé directement dans un autre logiciel, choix mémorisés, notification et progression dans la barre des tâches, mise à jour automatique avec « Quoi de neuf ? », connexion aux sites pour les vidéos réservées aux membres.
+**Découpe** — aperçu, miniatures du début et de la fin, zoom sur la barre de découpe, chapitres, liens avec un temps (`?t=`), plusieurs extraits d'un coup (fichiers séparés ou recollés), « enlever ce passage », raccourcis clavier (`I`, `O`, `Espace`, flèches…).
+**Export** — cadrage 9:16, 1:1 ou 4:5 (rogné ou sur fond flou), vitesse (×0,5 à ×2), fondu, volume harmonisé, boomerang, texte et logo incrustés, sous-titres (fichier `.srt` ou incrustés), vidéo sans le son, qualité audio au choix, taille maximale (10, 25 ou 50 Mo), taille estimée avant le téléchargement, nom de fichier modifiable et nettoyé (emojis, #, @).
+**Images** — capture PNG de l'image affichée, miniature de la vidéo.
+**Confort** — file d'attente (et playlists entières), historique, lien du presse-papiers proposé automatiquement, glisser-déposer d'un lien, glisser le fichier terminé directement dans un autre logiciel, choix mémorisés, notification et progression dans la barre des tâches, mise à jour automatique avec « Quoi de neuf ? », connexion aux sites pour les vidéos réservées aux membres, interface en français ou en anglais.
 
 ## Installation (Windows 10 / 11)
 

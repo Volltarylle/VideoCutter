@@ -188,6 +188,22 @@ footer .folder { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-
 
 @media (max-width: 560px) { .frames { grid-template-columns: 1fr; } .dl-row { flex-wrap: wrap; } }
 
+/* Liens discrets sous le titre (miniature, playlist) + message des images enregistrées */
+.meta-links { display: inline-flex; gap: 14px; margin-left: 10px; font-size: 13px; }
+.meta-links a[hidden] { display: none; }
+.snap-msg { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 10px; padding: 7px 12px; border-radius: 10px;
+  background: var(--accent-soft); font-size: 13px; }
+.snap-msg.err { background: none; padding: 0; }
+.snap-file { cursor: grab; word-break: break-all; color: var(--text); }
+/* Chapitres : menu compact dans l'en-tête de la carte « Passage » */
+.card-head { gap: 10px; }
+.card-head h2 { margin-right: auto; }
+.chapter-sel { width: 170px; padding: 5px 10px; font-size: 13px; color: var(--muted); }
+/* Options : texte incrusté, logo */
+.opt input[type=text] { flex: 1; min-width: 160px; max-width: 320px; padding: 8px 12px; }
+.opt .check-inline + .check-inline { margin-left: 6px; }
+#logoName { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Bandeau de mise à jour de l'appli */
 .update-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-bottom: 16px; padding: 12px 16px; border-radius: var(--radius); background: var(--accent-soft); border: 1px solid var(--accent); }

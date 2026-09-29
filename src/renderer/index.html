@@ -6,6 +6,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VideoCutter</title>
 <link rel="stylesheet" href="style.css">
+<script src="i18n.js" defer></script>
 <script src="renderer.js" defer></script>
 </head>
 <body>
@@ -65,6 +66,8 @@
         <tr><td><kbd>O</kbd></td><td>Placer la <b>fin</b> de l'extrait à la position actuelle de la vidéo</td></tr>
         <tr><td><kbd>P</kbd></td><td>Écouter l'extrait choisi, du début à la fin</td></tr>
         <tr><td><kbd>A</kbd></td><td>Ajouter l'extrait à la liste, pour en télécharger plusieurs d'un coup</td></tr>
+        <tr><td><kbd>X</kbd></td><td>Enlever le passage choisi et garder tout le reste</td></tr>
+        <tr><td><kbd>S</kbd></td><td>Enregistrer l'image affichée en PNG</td></tr>
         <tr><th colspan="2">Général</th></tr>
         <tr><td><kbd>Entrée</kbd></td><td>Dans le champ du lien : charger la vidéo</td></tr>
         <tr><td><kbd>?</kbd></td><td>Afficher cette aide</td></tr>
@@ -173,7 +176,13 @@
           </div>
         </div>
       </div>
-      <div class="meta"><b id="title"></b><span id="channel"></span></div>
+      <div class="meta"><b id="title"></b><span id="channel"></span>
+        <span class="meta-links">
+          <a href="#" id="thumbLink" hidden title="Enregistrer l'image de couverture de la vidéo">🖼 Miniature</a>
+          <a href="#" id="playlistLink" hidden title="Ajouter toutes les vidéos de la playlist à la file d'attente">📃 Toute la playlist</a>
+        </span>
+      </div>
+      <div class="snap-msg" id="snapMsg" hidden></div>
     </section>
 
     <section class="card" id="noCut" hidden>
@@ -183,6 +192,7 @@
     <section class="card" id="cutCard">
       <div class="row between card-head">
         <h2>Passage</h2>
+        <select id="chapterSel" class="chapter-sel" aria-label="Chapitres" hidden></select>
         <span class="zoom-ctl">
           <button type="button" id="zoomOut" class="icon-btn" title="Dézoomer">−</button>
           <span id="zoomLabel">×1</span>
@@ -223,8 +233,10 @@
         <span class="len">Durée <b id="clipLen"></b></span>
         <div class="row tools">
           <button type="button" id="preview" title="Écouter l'extrait (touche P)">▶ Écouter</button>
-          <button type="button" id="reset" title="Garder toute la vidéo">↺ Tout</button>
           <button type="button" id="addSeg" title="Ajouter ce passage à la liste, pour télécharger plusieurs passages d'un coup (touche A)">＋ Liste</button>
+          <button type="button" id="reset" class="icon-btn" title="Garder toute la vidéo">↺</button>
+          <button type="button" id="removeSeg" class="icon-btn" title="Enlever ce passage : garder tout le reste de la vidéo, recollé (touche X)">✂</button>
+          <button type="button" id="snapBtn" class="icon-btn" title="Enregistrer l'image affichée en PNG (touche S)">📷</button>
           <button type="button" id="keysBtn" class="icon-btn" title="Raccourcis clavier (touche ?)">⌨</button>
         </div>
       </div>
@@ -264,6 +276,13 @@
         <select id="quality" aria-label="Qualité vidéo">
           <option value="auto" selected>Auto</option>
         </select>
+        <select id="aQuality" aria-label="Qualité audio" hidden>
+          <option value="0" selected>Meilleure qualité</option>
+          <option value="320">320 kbit/s</option>
+          <option value="256">256 kbit/s</option>
+          <option value="192">192 kbit/s</option>
+          <option value="128">128 kbit/s (plus léger)</option>
+        </select>
       </div>
       <p class="note small mt" id="gifNote" hidden>GIF : sans son, 480 px maximum, 12 images/s. Idéal pour moins de 15 secondes.</p>
 
@@ -276,6 +295,14 @@
               <button type="button" data-crop="" class="on">Original</button>
               <button type="button" data-crop="9:16" title="Reels, TikTok, Shorts">Vertical 9:16</button>
               <button type="button" data-crop="1:1">Carré 1:1</button>
+              <button type="button" data-crop="4:5" title="Publications Instagram">4:5</button>
+            </div>
+          </div>
+          <div class="opt" id="fillRow" hidden>
+            <span class="opt-label"></span>
+            <div class="seg" id="fillSeg">
+              <button type="button" data-fill="crop" class="on" title="Garder une partie de l'image">Rogner</button>
+              <button type="button" data-fill="blur" title="Garder toute l'image, sur un fond flou">Fond flou</button>
             </div>
           </div>
           <p class="note small" id="cropNote" hidden>Déplace le cadre violet sur l'aperçu pour choisir la zone gardée.</p>
@@ -299,9 +326,43 @@
               <option value="50">50 Mo</option>
             </select>
           </div>
-          <div class="opt" id="muteRow">
+          <div class="opt" id="soundRow">
             <span class="opt-label">Son</span>
-            <label class="check-inline"><input type="checkbox" id="mute"> Retirer le son</label>
+            <label class="check-inline" id="muteRow"><input type="checkbox" id="mute"> Retirer le son</label>
+            <label class="check-inline" id="normRow" title="Met le volume au même niveau que les vidéos des réseaux sociaux"><input type="checkbox" id="norm"> Volume harmonisé</label>
+          </div>
+          <div class="opt">
+            <span class="opt-label">Effets</span>
+            <label class="check-inline" title="Fondu au noir et au silence, au début et à la fin"><input type="checkbox" id="fade"> Fondu</label>
+            <label class="check-inline" id="boomRow" title="L'extrait est joué à l'endroit puis à l'envers (30 s maximum)"><input type="checkbox" id="boomerang"> Boomerang</label>
+          </div>
+          <div class="opt" id="textRow">
+            <span class="opt-label">Texte</span>
+            <input type="text" id="overlayText" maxlength="80" spellcheck="false" placeholder="Texte affiché sur la vidéo">
+            <select id="textPos" aria-label="Position du texte">
+              <option value="top" selected>En haut</option>
+              <option value="bottom">En bas</option>
+            </select>
+          </div>
+          <div class="opt" id="logoRow">
+            <span class="opt-label">Logo</span>
+            <select id="logoPos" aria-label="Position du logo">
+              <option value="" selected>Aucun</option>
+              <option value="tr">En haut à droite</option>
+              <option value="tl">En haut à gauche</option>
+              <option value="br">En bas à droite</option>
+              <option value="bl">En bas à gauche</option>
+            </select>
+            <button type="button" id="logoPick" class="small">Choisir l'image…</button>
+            <span class="note small" id="logoName"></span>
+          </div>
+          <div class="opt" id="subsRow" hidden>
+            <span class="opt-label">Sous-titres</span>
+            <select id="subsLang" aria-label="Langue des sous-titres"><option value="">Aucun</option></select>
+            <select id="subsMode" aria-label="Type de sous-titres">
+              <option value="file" selected>Fichier .srt à part</option>
+              <option value="burn">Incrustés dans l'image</option>
+            </select>
           </div>
         </div>
       </details>
@@ -341,8 +402,8 @@
       <h2>File d'attente</h2>
       <button type="button" id="queueClose" class="small">Fermer</button>
     </div>
-    <p class="note">Les téléchargements se font l'un après l'autre. Ajoute un extrait réglé avec « ➕ File d'attente »,
-      ou colle plusieurs liens ci-dessous : chaque vidéo sera téléchargée en entier, avec les réglages de format actuels.</p>
+    <p class="note">Les téléchargements se font l'un après l'autre. Ajoute un extrait réglé avec le bouton « ＋ » à côté de « Télécharger »,
+      ou colle plusieurs liens ci-dessous (un lien de playlist ajoute toutes ses vidéos) : chaque vidéo sera téléchargée en entier, avec les réglages de format actuels.</p>
     <textarea id="bulkLinks" rows="3" spellcheck="false" placeholder="Un lien par ligne…"></textarea>
     <div class="row mt">
       <button type="button" id="bulkAdd">➕ Ajouter ces liens</button>
@@ -395,6 +456,7 @@
             <a href="#" id="updateLink">Mettre à jour yt-dlp</a>
             <a href="#" id="termsLink">Conditions d'utilisation</a>
             <a href="#" id="aboutLink">Licences</a>
+            <a href="#" id="langLink" lang="en">English</a>
           </div>
         </span>
       </span>

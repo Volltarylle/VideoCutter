@@ -43,6 +43,7 @@ const AUDIO_FORMATS = {
   opus: { codec: "opus",   thumb: true },
 };
 const VIDEO_FORMATS = new Set(["mp4", "mkv", "webm", "mov", "avi", "gif"]);
+const AUDIO_QUALITIES = new Set(["0", "320", "256", "192", "128"]); // "0" = meilleure qualité (débit variable)
 
 // Options communes : on ignore toute configuration/plugin externe à l'appli,
 // et yt-dlp utilise le moteur Node intégré à Electron pour les défis JS de YouTube.
@@ -117,10 +118,15 @@ function sanitizePrefs(p) {
   if (p.mode === "video" || p.mode === "audio") out.mode = p.mode;
   if (["mp4", "mkv", "webm", "mov", "avi", "gif"].includes(p.vFormat)) out.vFormat = p.vFormat;
   if (["mp3", "wav", "flac", "m4a", "ogg", "opus"].includes(p.aFormat)) out.aFormat = p.aFormat;
-  if (["", "9:16", "1:1"].includes(p.crop)) out.crop = p.crop;
+  if (["", "9:16", "1:1", "4:5"].includes(p.crop)) out.crop = p.crop;
+  if (p.fill === "crop" || p.fill === "blur") out.fill = p.fill;
   if ([0.5, 0.75, 1, 1.25, 1.5, 2].includes(p.speed)) out.speed = p.speed;
   if ([0, 10, 25, 50].includes(p.sizeMB)) out.sizeMB = p.sizeMB;
-  for (const k of ["merge", "mute", "cleanNames"]) if (typeof p[k] === "boolean") out[k] = p[k];
+  if (AUDIO_QUALITIES.has(p.aQuality)) out.aQuality = p.aQuality;
+  if (["", "tl", "tr", "bl", "br"].includes(p.logoPos)) out.logoPos = p.logoPos;
+  if (p.textPos === "top" || p.textPos === "bottom") out.textPos = p.textPos;
+  if (p.subsMode === "file" || p.subsMode === "burn") out.subsMode = p.subsMode;
+  for (const k of ["merge", "mute", "cleanNames", "fade", "norm"]) if (typeof p[k] === "boolean") out[k] = p[k];
   return out;
 }
 
@@ -132,6 +138,9 @@ function loadSettings() {
     if (Number.isFinite(saved.lastUpdateCheck)) s.lastUpdateCheck = saved.lastUpdateCheck;
     if (saved.terms && typeof saved.terms.version === "string") s.terms = { version: saved.terms.version, acceptedAt: String(saved.terms.acceptedAt || "") };
     s.prefs = sanitizePrefs(saved.prefs);
+    if (saved.lang === "fr" || saved.lang === "en") s.lang = saved.lang;
+    if (typeof saved.logo === "string" && /^logo\.(png|jpg|jpeg|webp)$/.test(saved.logo)) s.logo = saved.logo;
+    if (typeof saved.logoName === "string") s.logoName = saved.logoName.slice(0, 120);
   } catch {}
   return s;
 }
@@ -357,6 +366,42 @@ function pickFrameSource(formats) {
   return formatSource(vids.sort((a, b) => score(b) - score(a))[0]);
 }
 
+// Source de la meilleure image possible (≤ 1080p) pour les captures d'écran PNG.
+function pickStillSource(formats) {
+  const vids = (formats || []).filter(f => (f.vcodec ? f.vcodec !== "none" : /^(mp4|webm|mov|flv)$/.test(f.ext || "")) && httpUrl(f.url)
+    && /^(https?|m3u8|m3u8_native)$/.test(f.protocol || ""));
+  if (!vids.length) return null;
+  const h = f => f.height || 360;
+  const score = f => (/^https?$/.test(f.protocol) ? 10000 : 0) + (h(f) <= 1080 ? h(f) : -h(f));
+  return formatSource(vids.sort((a, b) => score(b) - score(a))[0]);
+}
+
+// Langues de sous-titres proposées : ceux écrits par l'auteur, plus les automatiques d'origine / fr / en.
+function subtitleLangs(j) {
+  const out = [];
+  const nameOf = list => (Array.isArray(list) ? list.find(x => typeof x?.name === "string")?.name : "") || "";
+  const okCode = c => /^[A-Za-z0-9][\w-]{0,19}$/.test(c); // jamais de « - » en tête : ne peut pas passer pour une option de yt-dlp
+  for (const [code, list] of Object.entries(j.subtitles || {})) {
+    if (code === "live_chat" || !okCode(code)) continue;
+    out.push({ code, auto: false, label: String(nameOf(list) || code).slice(0, 60) });
+  }
+  for (const [code, list] of Object.entries(j.automatic_captions || {})) {
+    if (!okCode(code) || out.some(o => o.code === code)) continue;
+    if (!code.endsWith("-orig") && code !== "fr" && code !== "en") continue;
+    out.push({ code, auto: true, label: String(nameOf(list) || code).slice(0, 60) });
+  }
+  return out.slice(0, 40);
+}
+
+// Instant de départ indiqué dans le lien (?t=90, ?t=1m30s, #t=…, &start=…)
+function startFromLink(link) {
+  let u; try { u = new URL(link); } catch { return 0; }
+  const raw = u.searchParams.get("t") || u.searchParams.get("start") || (u.hash.match(/[#&]t=([^&]+)/) || [])[1] || "";
+  const m = String(raw).match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s?)?$/);
+  if (!raw || !m) return 0;
+  return (+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0);
+}
+
 // Débits (kbit/s) par hauteur d'image et pour le son : servent à estimer la taille du fichier.
 function formatRates(formats, heights) {
   const kbps = f => finite(f.vbr, 0) || finite(f.tbr, 0) || (finite(f.filesize || f.filesize_approx, 0) && finite(f.duration, 0) ? (f.filesize || f.filesize_approx) * 8 / f.duration / 1000 : 0);
@@ -450,7 +495,7 @@ function openLoginWindow(target) {
   if (!url || !mainWindow) return false;
   const win = new BrowserWindow({
     parent: mainWindow, width: 1000, height: 820, autoHideMenuBar: true,
-    title: "Connexion — " + new URL(url).hostname, backgroundColor: "#ffffff",
+    title: L("Connexion — ", "Sign in — ") + new URL(url).hostname, backgroundColor: "#ffffff",
     webPreferences: { partition: LOGIN_PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, devTools: !app.isPackaged },
   });
   win.on("page-title-updated", e => e.preventDefault());
@@ -460,6 +505,10 @@ function openLoginWindow(target) {
 }
 
 const SITE_NAMES = { Youtube: "YouTube", Twitter: "X (Twitter)", Instagram: "Instagram", TikTok: "TikTok", Dailymotion: "Dailymotion", Vimeo: "Vimeo", Facebook: "Facebook", Reddit: "Reddit", TwitchClips: "Twitch", TwitchVod: "Twitch", Soundcloud: "SoundCloud", Generic: "Page web" };
+
+// Langue de l'interface : choisie dans le menu ⋯, sinon celle de Windows (français, ou anglais pour toutes les autres)
+const uiLang = () => settings?.lang || (/^fr/i.test(app.getLocale()) ? "fr" : "en");
+const L = (fr, en) => (uiLang() === "en" ? en : fr);
 
 const termsAccepted = () => settings?.terms?.version === TERMS_VERSION;
 const TERMS_ERROR = { error: "Accepte les conditions d'utilisation pour utiliser VideoCutter." };
@@ -485,7 +534,8 @@ async function getInfo(url) {
   if (r.err) return { error: cleanError(r.stderr) };
   let j;
   try { j = JSON.parse(r.stdout); } catch { return { error: "Réponse illisible de yt-dlp." }; }
-  if (j._type === "playlist") j = (j.entries || []).find(Boolean);
+  let isPlaylist = /[?&]list=/.test(link) || /\/(playlist|sets|album)\b/i.test(new URL(link).pathname);
+  if (j._type === "playlist") { isPlaylist = true; j = (j.entries || []).find(Boolean); }
   if (!j || j._type === "url" || (!j.formats?.length && !j.url)) return { error: "Aucune vidéo trouvée à ce lien (page sans vidéo ou site non pris en charge)." };
 
   const formats = j.formats || [j];
@@ -505,16 +555,24 @@ async function getInfo(url) {
     url: httpUrl(j.webpage_url) || link, duration, hasVideo, hasAudio, preview, heights, useCookies,
     thumb: httpUrl(j.thumbnail) ? { url: httpUrl(j.thumbnail), headers: {} } : null,
     frameSrc: hasVideo && duration ? pickFrameSource(formats) : null,
+    stillSrc: hasVideo ? pickStillSource(formats) : null,
+    subs: hasVideo && duration ? subtitleLangs(j) : [],
   };
   infos.set(token, entry);
   while (infos.size > MAX_INFOS) infos.delete(infos.keys().next().value);
+
+  const chapters = duration ? (Array.isArray(j.chapters) ? j.chapters : [])
+    .map(c => ({ start: finite(c?.start_time, NaN), end: finite(c?.end_time, NaN), title: String(c?.title || "").slice(0, 120) }))
+    .filter(c => c.start >= 0 && c.end > c.start && c.start < duration).slice(0, 100) : [];
+  const startAt = duration ? Math.min(Math.max(0, finite(j.start_time, 0) || startFromLink(link)), Math.max(0, duration - 1)) : 0;
 
   return {
     token, title, channel: String(j.channel || j.uploader || ""), site, url: entry.url,
     width: finite(j.width, 0) || null, height: finite(j.height, 0) || null,
     duration, isLive: !!j.is_live, hasVideo, hasAudio, heights, loggedIn: useCookies,
     youtubeId: isYouTube ? j.id : null, preview: !!entry.preview, thumb: !!entry.thumb,
-    frames: !!entry.frameSrc, rates: formatRates(formats, heights),
+    frames: !!entry.frameSrc, still: !!entry.stillSrc, rates: formatRates(formats, heights),
+    chapters, startAt, subs: entry.subs.map(s => ({ code: s.code, label: s.label, auto: s.auto })), isPlaylist,
   };
 }
 
@@ -540,6 +598,72 @@ async function frameAt(token, t) {
   return img;
 }
 
+// Arguments FFmpeg pour lire une adresse web obtenue par yt-dlp (avec les en-têtes exigés par le site)
+function ffWebInput(src, seek) {
+  const hdr = Object.entries(src.headers || {}).map(([k, v]) => `${k}: ${v}\r\n`).join("");
+  const args = ["-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-rw_timeout", "15000000",
+    "-protocol_whitelist", "https,http,tls,tcp,crypto,hls"];
+  if (seek !== undefined) args.push("-ss", seek.toFixed(2));
+  if (hdr) args.push("-headers", hdr);
+  args.push("-i", src.url);
+  return args;
+}
+
+// Enregistre une image fixe (capture PNG ou miniature JPEG) dans le dossier choisi.
+// Elle est inscrite comme une tâche terminée : « Ouvrir », « Afficher » et le glisser-déposer fonctionnent pareil.
+async function saveImage(src, fileName, extra) {
+  if (!isDir(settings.downloadDir)) return { error: "Le dossier de destination n'existe plus. Choisis-en un autre." };
+  const dir = path.join(TEMP_ROOT, "img-" + require("crypto").randomUUID());
+  fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, fileName);
+  try {
+    const ok = await new Promise(resolve => execFile(FFMPEG(), [...src, ...extra, "-frames:v", "1", out],
+      { env: CHILD_ENV, windowsHide: true, timeout: 45000 }, err => resolve(!err && fs.existsSync(out))));
+    if (!ok) return { error: "Impossible de récupérer cette image." };
+    const dest = await finalizeFile(out, settings.downloadDir);
+    const id = String(++jobCounter);
+    jobs.set(id, { id, status: "done", files: [dest] });
+    return { id, file: path.basename(dest) };
+  } catch (e) {
+    return { error: "Impossible d'enregistrer l'image (" + (e.code || e.message) + ")." };
+  } finally { fs.rm(dir, { recursive: true, force: true }, () => {}); }
+}
+
+async function snapshot(o) {
+  const entry = infos.get(String(o?.token));
+  if (!entry?.stillSrc || !entry.duration) return { error: "Capture impossible pour cette vidéo." };
+  const t = Math.min(Math.max(0, finite(Number(o.t), 0)), Math.max(0, entry.duration - 0.05));
+  const crop = CROPS[o.crop] && o.fill !== "blur" ? o.crop : null;
+  const extra = crop ? ["-vf", cropFilter(crop, Math.min(1, Math.max(0, finite(Number(o.cropPos), 0.5))))] : [];
+  const base = safeName(o.name) || safeName(entry.title) || "image";
+  return saveImage(ffWebInput(entry.stillSrc, t), `${base} [${stamp(t)}].png`, extra);
+}
+
+async function saveThumb(o) {
+  const entry = infos.get(String(o?.token));
+  if (!entry?.thumb) return { error: "Cette vidéo n'a pas de miniature." };
+  const base = safeName(o.name) || safeName(entry.title) || "miniature";
+  return saveImage(ffWebInput(entry.thumb), `${base} [miniature].jpg`, ["-q:v", "2"]);
+}
+
+// Liste des vidéos d'une playlist (200 maximum), pour les ajouter à la file d'attente.
+async function playlistEntries(url) {
+  if (!termsAccepted()) return TERMS_ERROR;
+  const link = validateUrl(url);
+  if (!link) return { error: "Ce n'est pas un lien valide." };
+  await ready;
+  const r = await run([...BASE_ARGS, "--yes-playlist", "--flat-playlist", "--no-warnings", "--socket-timeout", "15",
+    "--playlist-end", "200", "-J", "--", link], { timeout: 120000 });
+  if (r.err) return { error: r.err.killed ? "Le site met trop de temps à répondre. Réessaie." : cleanError(r.stderr) };
+  let j;
+  try { j = JSON.parse(r.stdout); } catch { return { error: "Réponse illisible de yt-dlp." }; }
+  const list = j._type === "playlist" ? (j.entries || []) : [j];
+  const entries = list.filter(Boolean)
+    .map(e => ({ url: validateUrl(String(e.url || e.webpage_url || "")), title: String(e.title || e.id || "").slice(0, 300) }))
+    .filter(e => e.url && !/^\[(private|deleted)/i.test(e.title));
+  return { title: String(j.title || "").slice(0, 300), entries: entries.slice(0, 200) };
+}
+
 // ---------------------------------------------------------------------------
 // Téléchargements
 // ---------------------------------------------------------------------------
@@ -552,8 +676,9 @@ const stamp = sec => {
   return (h ? h + "h" : "") + String(m).padStart(2, "0") + "m" + String(r).padStart(2, "0") + "s";
 };
 
-const CROPS = { "9:16": 9 / 16, "1:1": 1 };
-const CROP_TAGS = { "9:16": "9x16", "1:1": "1x1" };
+const CROPS = { "9:16": 9 / 16, "1:1": 1, "4:5": 4 / 5 };
+const CROP_TAGS = { "9:16": "9x16", "1:1": "1x1", "4:5": "4x5" };
+const LOGO_CORNERS = new Set(["tl", "tr", "bl", "br"]);
 const MAX_SEGMENTS = 20;
 
 const SPEEDS = new Set([0.5, 0.75, 1, 1.25, 1.5, 2]);
@@ -568,9 +693,9 @@ function safeName(name) {
   return s;
 }
 
-function buildArgs({ url, start, end, duration, mode, format, quality, cookieFile, name }, tempDir) {
+function buildArgs({ url, start, end, duration, mode, format, quality, aQuality, cookieFile, name, ownName }, tempDir) {
   const cut = start > 0.05 || end < duration - 0.05;
-  const suffix = cut ? ` [${stamp(start)}-${stamp(end)}]` : "";
+  const suffix = cut && !ownName ? ` [${stamp(start)}-${stamp(end)}]` : ""; // un chapitre garde son propre nom, sans horodatage
   const base = name ? name.replace(/%/g, "%%") : "%(title)s"; // « % » a un sens spécial dans le modèle de yt-dlp
   const args = [
     ...BASE_ARGS,
@@ -585,7 +710,7 @@ function buildArgs({ url, start, end, duration, mode, format, quality, cookieFil
 
   if (mode === "audio") {
     const a = AUDIO_FORMATS[format];
-    args.push("-f", "ba/b", "-x", "--audio-format", a.codec, "--audio-quality", "0", "--embed-metadata");
+    args.push("-f", "ba/b", "-x", "--audio-format", a.codec, "--audio-quality", aQuality && aQuality !== "0" ? aQuality + "K" : "0", "--embed-metadata");
     if (a.thumb) args.push("--embed-thumbnail");
   } else {
     const res = quality === "auto" ? "res" : `res:${quality}`; // "auto" = meilleure qualité disponible
@@ -644,80 +769,166 @@ function videoCodecArgs(ext) {
   if (ext === ".avi") return ["-c:v", "mpeg4", "-q:v", "3"];
   return ["-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-pix_fmt", "yuv420p"];
 }
-function audioCodecArgs(ext) {
+function audioCodecArgs(ext, kbps) {
+  const b = kbps && kbps !== "0" ? ["-b:a", kbps + "k"] : null; // débit choisi par l'utilisateur (Musique)
   return {
-    ".mp3": ["-c:a", "libmp3lame", "-q:a", "2"], ".wav": ["-c:a", "pcm_s16le"], ".flac": ["-c:a", "flac"],
-    ".m4a": ["-c:a", "aac", "-b:a", "256k"], ".ogg": ["-c:a", "libvorbis", "-q:a", "6"], ".opus": ["-c:a", "libopus", "-b:a", "160k"],
+    ".mp3": ["-c:a", "libmp3lame", ...(b || ["-q:a", "2"])], ".wav": ["-c:a", "pcm_s16le"], ".flac": ["-c:a", "flac"],
+    ".m4a": ["-c:a", "aac", ...(b || ["-b:a", "256k"])], ".ogg": ["-c:a", "libvorbis", ...(b || ["-q:a", "6"])], ".opus": ["-c:a", "libopus", ...(b || ["-b:a", "160k"])],
     ".webm": ["-c:a", "libopus", "-b:a", "160k"], ".avi": ["-c:a", "libmp3lame", "-q:a", "2"],
   }[ext] || ["-c:a", "aac", "-b:a", "192k"];
 }
 const FFMPEG = () => path.join(FFMPEG_DIR, "ffmpeg.exe");
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"]);
-const needsPost = p => !!(p.gif || p.crop || p.speed !== 1 || p.mute || p.sizeMB);
+const needsPost = p => !!(p.gif || p.crop || p.speed !== 1 || p.mute || p.sizeMB || p.fade || p.norm || p.boomerang || p.text || p.logo || p.burnSubs);
 
-// Filtre de recadrage 9:16 / 1:1 à la position choisie (0 = gauche/haut, 1 = droite/bas)
+// Filtre de recadrage 9:16 / 1:1 / 4:5 à la position choisie (0 = gauche/haut, 1 = droite/bas)
 const cropFilter = (crop, cropPos) => {
   const r = CROPS[crop], pos = cropPos.toFixed(4);
   return `crop=w=trunc(min(iw\\,ih*${r})/2)*2:h=trunc(min(ih\\,iw/${r})/2)*2:x=(iw-ow)*${pos}:y=(ih-oh)*${pos}`;
 };
+const even = n => Math.max(2, Math.floor(n / 2) * 2);
 
-// Étape de finition, en un seul réencodage : recadrage (9:16, 1:1), vitesse, suppression du son,
-// et objectif de taille (débit calculé pour tenir sous X Mo, avec baisse de résolution si nécessaire).
-async function postProcess(job, src, { gif, crop, cropPos, speed, mute, sizeMB, duration }, report) {
-  const ext = path.extname(src), audioOnly = AUDIO_EXTS.has(ext);
-  const outDur = Math.max(0.1, duration / speed);
+// Police pour le texte et les sous-titres incrustés : copiée à côté du fichier (chemin relatif, rien à échapper)
+const FONT_CANDIDATES = ["arialbd.ttf", "segoeuib.ttf", "arial.ttf"].map(f => path.join(process.env.SystemRoot || "C:\\Windows", "Fonts", f));
+function ensureFont(dir) {
+  const f = FONT_CANDIDATES.find(p => fs.existsSync(p));
+  if (!f) return false;
+  fs.mkdirSync(path.join(dir, "fonts"), { recursive: true });
+  const dest = path.join(dir, "fonts", "police.ttf");
+  if (!fs.existsSync(dest)) fs.copyFileSync(f, dest);
+  return true;
+}
 
-  // GIF : 12 images/s, 480 px de large maxi, palette de couleurs calculée pour cette vidéo
-  if (gif) {
-    const vf = [crop && cropFilter(crop, cropPos), speed !== 1 && `setpts=PTS/${speed}`,
-      // Le plus grand côté est limité à 480 px (paysage, vertical ou carré)
-      "fps=12", "scale='if(gte(iw,ih),min(iw,480),-2)':'if(gte(iw,ih),-2,min(ih,480))':flags=lanczos",
-      "split[a][b];[a]palettegen=max_colors=192:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle"].filter(Boolean);
-    const tags = [crop && CROP_TAGS[crop], speed !== 1 && `x${speed}`].filter(Boolean);
-    const out = src.slice(0, -ext.length) + (tags.length ? " " + tags.join(" ") : "") + ".gif";
-    const code = await runTool(job, FFMPEG(), ["-hide_banner", "-nostdin", "-y", "-i", src, "-an", "-vf", vf.join(","), "-loop", "0", out],
-      path.dirname(src), line => { const t = ffTime(line); if (t !== null) report(Math.min(1, t / outDur)); });
-    if (code !== 0 || !fs.existsSync(out)) throw new Error("conversion en GIF impossible");
-    fs.rmSync(src, { force: true });
-    return out;
+// Durée, dimensions et présence du son d'un fichier produit.
+function probeMedia(file) {
+  return new Promise(resolve => execFile(path.join(FFMPEG_DIR, "ffprobe.exe"),
+    ["-v", "error", "-show_entries", "stream=codec_type,width,height:stream_disposition=attached_pic:format=duration", "-of", "json", file],
+    { env: CHILD_ENV, windowsHide: true, timeout: 15000 }, (err, out) => {
+      try {
+        const j = JSON.parse(String(out));
+        const v = (j.streams || []).find(s => s.codec_type === "video" && !s.disposition?.attached_pic);
+        const d = parseFloat(j.format?.duration);
+        resolve({ duration: d > 0 ? d : null, width: v?.width || 0, height: v?.height || 0, audio: (j.streams || []).some(s => s.codec_type === "audio") });
+      } catch { resolve({ duration: null, width: 0, height: 0, audio: true }); }
+    }));
+}
+
+// Étape de finition, en un seul réencodage : cadrage (rogné ou fond flou), vitesse, sous-titres incrustés,
+// boomerang, texte, logo, fondus, volume harmonisé, retrait du son, taille maximale, GIF.
+async function postProcess(job, src, p, m, report) {
+  const ext = path.extname(src), audioOnly = AUDIO_EXTS.has(ext), dir = path.dirname(src);
+  const speed = p.speed, boomerang = p.boomerang && !audioOnly;
+  const outDur = Math.max(0.1, (m.duration || p.duration) / speed * (boomerang ? 2 : 1));
+  const FADE = Math.min(0.6, outDur / 4).toFixed(2), fadeOutAt = Math.max(0, outDur - FADE).toFixed(2);
+  const graph = [];
+  let n = 0;
+  const label = k => `${k}${++n}`;
+
+  // --- Son ---
+  let a = "0:a", aChanged = false;
+  const aStep = f => { const o = label("a"); graph.push(`[${a}]${f}[${o}]`); a = o; aChanged = true; };
+  const withAudio = m.audio && !(p.mute && !audioOnly) && !p.gif;
+  if (withAudio) {
+    if (speed !== 1) aStep(`atempo=${speed}`);
+    if (boomerang) { const x = label("a"), y = label("a"), r = label("a"), o = label("a");
+      graph.push(`[${a}]asplit=2[${x}][${y}]`, `[${y}]areverse[${r}]`, `[${x}][${r}]concat=n=2:v=0:a=1[${o}]`); a = o; aChanged = true; }
+    if (p.norm) aStep("loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000");
+    if (p.fade) aStep(`afade=t=in:st=0:d=${FADE},afade=t=out:st=${fadeOutAt}:d=${FADE}`);
   }
-  const tags = [crop && CROP_TAGS[crop], speed !== 1 && `x${speed}`, mute && !audioOnly && "sans son"].filter(Boolean);
-  const out = src.slice(0, -ext.length) + (tags.length ? " " + tags.join(" ") : " final") + ext;
+
+  const tags = [p.crop && CROP_TAGS[p.crop] + (p.fill === "blur" ? " flou" : ""), speed !== 1 && `x${speed}`,
+    boomerang && "boomerang", p.mute && !audioOnly && !p.gif && "sans son"].filter(Boolean);
+  const out = src.slice(0, -ext.length) + (tags.length ? " " + tags.join(" ") : p.gif ? "" : " final") + (p.gif ? ".gif" : ext);
   const args = ["-hide_banner", "-nostdin", "-y", "-i", src];
-  const atempo = speed !== 1 ? ["-af", `atempo=${speed}`] : [];
 
   if (audioOnly) {
-    args.push("-vn", ...atempo, ...audioCodecArgs(ext));
+    if (aChanged) args.push("-filter_complex", graph.join(";"), "-map", `[${a}]`);
+    else args.push("-map", "0:a");
+    args.push("-vn", ...audioCodecArgs(ext, p.aQuality));
   } else {
-    const vf = [];
-    if (crop) vf.push(cropFilter(crop, cropPos));
-    if (speed !== 1) vf.push(`setpts=PTS/${speed}`);
-    let vcodec = videoCodecArgs(ext);
-    const aK = mute ? 0 : 96;
-    if (sizeMB) {
-      // Débit total visé (kbit/s) avec 7 % de marge pour l'enveloppe du fichier
-      const totalK = (sizeMB * 8 * 1024 * 0.93) / outDur;
-      const vK = Math.max(80, Math.floor(totalK - aK));
-      if (vK < 400) vf.push("scale=-2:'min(ih,480)'");
-      else if (vK < 1000) vf.push("scale=-2:'min(ih,720)'");
-      // Qualité normale mais débit PLAFONNÉ : un extrait simple reste petit, un extrait lourd ne dépasse pas la limite
-      if (ext === ".webm") vcodec = ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", `${vK}k`, "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1"];
-      else if (ext === ".avi") vcodec = ["-c:v", "mpeg4", "-q:v", "3", "-maxrate", `${vK}k`, "-bufsize", `${vK * 2}k`];
-      else vcodec = ["-c:v", "libx264", "-crf", "20", "-maxrate", `${vK}k`, "-bufsize", `${vK * 2}k`, "-preset", "veryfast", "-pix_fmt", "yuv420p"];
+    // --- Image ---
+    let v = "0:v", vChanged = false, W = m.width || 1280, H = m.height || 720;
+    const vStep = f => { const o = label("v"); graph.push(`[${v}]${f}[${o}]`); v = o; vChanged = true; };
+    if (p.crop && p.fill === "blur") {
+      // Toute l'image, centrée, sur un fond flou qui remplit le format choisi
+      const r = CROPS[p.crop];
+      // Image plus large que le format visé (ex. 1920×1080 → 9:16) : largeur finale = hauteur d'origine (1080×1920)
+      let OW = W / H >= r ? H : W, OH = OW / r;
+      const k = Math.min(1, 1920 / Math.max(OW, OH));
+      OW = even(OW * k); OH = even(OH * k);
+      const bw = even(OW / 4), bh = even(OH / 4);
+      const s1 = label("v"), s2 = label("v"), bg = label("v"), fg = label("v"), o = label("v");
+      graph.push(`[${v}]split=2[${s1}][${s2}]`,
+        `[${s1}]scale=${bw}:${bh}:force_original_aspect_ratio=increase,crop=${bw}:${bh},boxblur=12:2,scale=${OW}:${OH},setsar=1[${bg}]`,
+        `[${s2}]scale=${OW}:${OH}:force_original_aspect_ratio=decrease,setsar=1[${fg}]`,
+        `[${bg}][${fg}]overlay=(W-w)/2:(H-h)/2[${o}]`);
+      v = o; vChanged = true; W = OW; H = OH;
+    } else if (p.crop) {
+      const r = CROPS[p.crop];
+      vStep(cropFilter(p.crop, p.cropPos));
+      [W, H] = [even(Math.min(W, H * r)), even(Math.min(H, W / r))];
     }
-    vf.push("scale=trunc(iw/2)*2:trunc(ih/2)*2"); // dimensions paires (exigé par H.264)
-    args.push("-vf", vf.join(","), ...vcodec);
-    if (mute) args.push("-an");
-    else if (speed !== 1 || sizeMB) {
-      const acodec = ext === ".webm" ? "libopus" : ext === ".avi" ? "libmp3lame" : "aac";
-      args.push(...atempo, "-c:a", acodec, "-b:a", sizeMB ? `${aK}k` : "192k");
-    } else args.push("-c:a", "copy");
-    if (ext === ".mp4" || ext === ".mov") args.push("-movflags", "+faststart");
+    if (speed !== 1) vStep(`setpts=PTS/${speed}`);
+    if (p.burnSubs && ensureFont(dir)) {
+      fs.writeFileSync(path.join(dir, "st.srt"), p.burnSubs);
+      vStep("subtitles=st.srt:fontsdir=fonts:force_style='FontName=Arial,Bold=1,FontSize=17,Outline=1.6,Shadow=0,MarginV=16'");
+    }
+    if (boomerang) { const x = label("v"), y = label("v"), r = label("v"), o = label("v");
+      graph.push(`[${v}]split=2[${x}][${y}]`, `[${y}]reverse[${r}]`, `[${x}][${r}]concat=n=2:v=1:a=0[${o}]`); v = o; vChanged = true; }
+    if (p.text && ensureFont(dir)) {
+      fs.writeFileSync(path.join(dir, "texte.txt"), p.text);
+      // Taille : proportionnelle à l'image, réduite si le texte est long pour qu'il tienne en largeur
+      const fsz = Math.round(Math.max(14, Math.min(W / 13, (1.6 * W) / Math.max(10, [...p.text].length))));
+      const margin = Math.round(H * 0.06);
+      vStep(`drawtext=fontfile=fonts/police.ttf:textfile=texte.txt:expansion=none:fontcolor=white:fontsize=${fsz}`
+        + `:borderw=${Math.max(2, Math.round(fsz / 12))}:bordercolor=black@0.85:x=(w-text_w)/2:y=${p.textPos === "bottom" ? `h-text_h-${margin}` : margin}`);
+    }
+    if (p.logo) {
+      args.push("-i", p.logo);
+      const lw = even(Math.min(W, H) * 0.2), mg = Math.round(Math.min(W, H) * 0.04);
+      const x = p.logoPos[1] === "l" ? mg : `W-w-${mg}`, y = p.logoPos[0] === "t" ? mg : `H-h-${mg}`;
+      const lg = label("l"), o = label("v");
+      graph.push(`[1:v]scale=${lw}:-1,format=rgba,colorchannelmixer=aa=0.9[${lg}]`, `[${v}][${lg}]overlay=${x}:${y}:format=auto[${o}]`);
+      v = o; vChanged = true;
+    }
+    if (p.fade) vStep(`fade=t=in:st=0:d=${FADE},fade=t=out:st=${fadeOutAt}:d=${FADE}`);
+
+    if (p.gif) {
+      // GIF : 12 images/s, le plus grand côté limité à 480 px, palette de couleurs calculée pour cette vidéo
+      const x = label("v"), y = label("v"), pal = label("v"), o = label("v");
+      graph.push(`[${v}]fps=12,scale='if(gte(iw,ih),min(iw,480),-2)':'if(gte(iw,ih),-2,min(ih,480))':flags=lanczos,split=2[${x}][${y}]`,
+        `[${x}]palettegen=max_colors=192:stats_mode=diff[${pal}]`, `[${y}][${pal}]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle[${o}]`);
+      args.push("-filter_complex", graph.join(";"), "-map", `[${o}]`, "-loop", "0", out);
+    } else {
+      let vcodec = videoCodecArgs(ext);
+      const aK = withAudio ? 96 : 0;
+      if (p.sizeMB) {
+        // Débit total visé (kbit/s) avec 7 % de marge pour l'enveloppe du fichier
+        const vK = Math.max(80, Math.floor((p.sizeMB * 8 * 1024 * 0.93) / outDur - aK));
+        if (vK < 400) vStep("scale=-2:'min(ih,480)'");
+        else if (vK < 1000) vStep("scale=-2:'min(ih,720)'");
+        // Qualité normale mais débit PLAFONNÉ : un extrait simple reste petit, un extrait lourd ne dépasse pas la limite
+        if (ext === ".webm") vcodec = ["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", `${vK}k`, "-deadline", "realtime", "-cpu-used", "8", "-row-mt", "1"];
+        else if (ext === ".avi") vcodec = ["-c:v", "mpeg4", "-q:v", "3", "-maxrate", `${vK}k`, "-bufsize", `${vK * 2}k`];
+        else vcodec = ["-c:v", "libx264", "-crf", "20", "-maxrate", `${vK}k`, "-bufsize", `${vK * 2}k`, "-preset", "veryfast", "-pix_fmt", "yuv420p"];
+      }
+      if (vChanged || p.sizeMB) vStep("scale=trunc(iw/2)*2:trunc(ih/2)*2"); // dimensions paires (exigé par H.264)
+      if (graph.length) args.push("-filter_complex", graph.join(";"));
+      // Image inchangée (seul le son change) : copiée telle quelle, sans perte ni attente
+      args.push("-map", vChanged ? `[${v}]` : "0:v:0", ...(vChanged ? vcodec : ["-c:v", "copy"]));
+      if (withAudio) {
+        const acodec = ext === ".webm" ? "libopus" : ext === ".avi" ? "libmp3lame" : "aac";
+        if (aChanged) args.push("-map", `[${a}]`, "-c:a", acodec, "-b:a", p.sizeMB ? `${aK}k` : "192k");
+        else if (p.sizeMB) args.push("-map", "0:a:0", "-c:a", acodec, "-b:a", `${aK}k`);
+        else args.push("-map", "0:a:0", "-c:a", "copy");
+      }
+      if (ext === ".mp4" || ext === ".mov") args.push("-movflags", "+faststart");
+    }
   }
-  args.push("-map_metadata", "0", out);
-  const code = await runTool(job, FFMPEG(), args, path.dirname(src), line => { const t = ffTime(line); if (t !== null) report(Math.min(1, t / outDur)); });
-  if (code !== 0 || !fs.existsSync(out)) throw new Error("finition impossible");
+  if (!p.gif) args.push("-map_metadata", "0", out);
+  const code = await runTool(job, FFMPEG(), args, dir, line => { const t = ffTime(line); if (t !== null) report(Math.min(1, t / outDur)); });
+  if (code !== 0 || !fs.existsSync(out)) throw new Error(p.gif ? "conversion en GIF impossible" : "finition impossible");
   fs.rmSync(src, { force: true });
   return out;
 }
@@ -752,6 +963,7 @@ async function startDownload(opts) {
   const segments = raw.map(s => ({
     start: known ? Math.max(0, finite(s?.start, 0)) : 0,
     end: known ? Math.min(duration, finite(s?.end, duration)) : duration,
+    name: known ? safeName(s?.name) : "", // nom propre (chapitres)
   }));
   if (segments.some(s => !(s.end > s.start))) return { error: "Pour chaque extrait, la fin doit être après le début." };
   const mode = opts.mode === "audio" ? "audio" : "video";
@@ -767,6 +979,25 @@ async function startDownload(opts) {
   const mute = mode === "video" && !gif && !!opts.mute;
   const sizeMB = mode === "video" && !gif && SIZE_TARGETS.has(Number(opts.sizeMB)) ? Number(opts.sizeMB) : 0;
   const name = safeName(opts.name);
+  const video = mode === "video";
+  const aQuality = mode === "audio" && AUDIO_QUALITIES.has(String(opts.aQuality)) ? String(opts.aQuality) : "0";
+  // Texte incrusté : les emojis sont retirés (la police ne sait pas les dessiner : ils deviendraient des carrés)
+  const text = video ? String(opts.text || "").replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}‍️⃣]/gu, "").replace(/\s+/g, " ").trim().slice(0, 80) : "";
+  const logoFile = settings.logo ? path.join(app.getPath("userData"), settings.logo) : null;
+  const logoPos = video && LOGO_CORNERS.has(opts.logoPos) && logoFile && fs.existsSync(logoFile) ? opts.logoPos : "";
+  const sub = video && known ? info.subs.find(s => s.code === opts.subsLang) || null : null;
+  const fx = {
+    fill: crop && opts.fill === "blur" ? "blur" : "crop",
+    fade: !!opts.fade, norm: !!opts.norm && !(video && (mute || gif)),
+    boomerang: video && !!opts.boomerang,
+    text, textPos: opts.textPos === "bottom" ? "bottom" : "top",
+    logo: logoPos ? logoFile : null, logoPos,
+    sub, subsMode: opts.subsMode === "burn" ? "burn" : "file", aQuality,
+  };
+  // Le boomerang garde toute la vidéo en mémoire : limité aux extraits courts
+  const longest = merge ? segments.reduce((t, s) => t + s.end - s.start, 0) : Math.max(...segments.map(s => s.end - s.start));
+  if (fx.boomerang && (!known || longest / speed > 30)) return { error: "Le boomerang est limité aux extraits de 30 secondes maximum." };
   if (!isDir(settings.downloadDir)) return { error: "Le dossier de destination n'existe plus. Choisis-en un autre." };
   if ([...jobs.values()].filter(j => j.status === "running").length >= MAX_PARALLEL) return { error: "Trop de téléchargements en cours. Attends qu'un se termine." };
 
@@ -777,14 +1008,44 @@ async function startDownload(opts) {
   fs.mkdirSync(tempDir, { recursive: true });
   const job = { id: jobId, status: "running", percent: null, line: "Préparation…", files: [], error: null, lastSent: 0, tempDir, proc: null };
   jobs.set(jobId, job);
-  runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos, speed, mute, sizeMB, name }).catch(() => {});
+  runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos, speed, mute, sizeMB, name, fx }).catch(() => {});
   return { id: jobId };
 }
 
-// Durée réelle d'un fichier produit (sert au calcul du débit pour l'objectif de taille).
-function fileDuration(file) {
-  return new Promise(resolve => execFile(path.join(FFMPEG_DIR, "ffprobe.exe"), ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file],
-    { env: CHILD_ENV, windowsHide: true, timeout: 15000 }, (err, out) => { const d = parseFloat(String(out).trim()); resolve(!err && d > 0 ? d : null); }));
+// ---------------------------------------------------------------------------
+// Sous-titres : récupérés une fois pour toute la vidéo, puis recalés sur chaque extrait (début, vitesse, extraits recollés)
+// ---------------------------------------------------------------------------
+function parseSrt(text) {
+  const sec = s => { const m = String(s).match(/(\d+):(\d+):(\d+)[,.](\d+)/); return m ? +m[1] * 3600 + +m[2] * 60 + +m[3] + +m[4].padEnd(3, "0").slice(0, 3) / 1000 : NaN; };
+  return text.replace(/^﻿/, "").replace(/\r/g, "").split(/\n{2,}/).map(b => {
+    const ls = b.split("\n"), i = ls.findIndex(l => l.includes("-->"));
+    if (i < 0) return null;
+    const [s, e] = ls[i].split("-->");
+    return { s: sec(s), e: sec(e), t: ls.slice(i + 1).join("\n").trim() };
+  }).filter(c => c && c.t && c.e > c.s);
+}
+function srtFor(cues, parts, speed) {
+  const ts = x => { const ms = Math.max(0, Math.round(x * 1000)); const p = (v, n = 2) => String(v).padStart(n, "0");
+    return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`; };
+  const out = [];
+  let offset = 0;
+  for (const part of parts) {
+    for (const c of cues) {
+      if (c.e <= part.start || c.s >= part.end) continue;
+      out.push({ s: (Math.max(c.s, part.start) - part.start + offset) / speed, e: (Math.min(c.e, part.end) - part.start + offset) / speed, t: c.t });
+    }
+    offset += part.end - part.start;
+  }
+  return out.length ? out.map((c, i) => `${i + 1}\n${ts(c.s)} --> ${ts(c.e)}\n${c.t}\n`).join("\n") : null;
+}
+async function fetchSubs(job, info, sub, cookieFile) {
+  const dir = path.join(job.tempDir, "subs");
+  fs.mkdirSync(dir, { recursive: true });
+  const args = [...BASE_ARGS, "--skip-download", sub.auto ? "--write-auto-subs" : "--write-subs", "--sub-langs", sub.code,
+    "--convert-subs", "srt", "-P", dir, "-o", "st.%(ext)s", ...(cookieFile ? ["--cookies", cookieFile] : []), "--", info.url];
+  await runTool(job, YTDLP, args, dir, () => {});
+  const f = fs.readdirSync(dir).find(n => n.endsWith(".srt"));
+  return f ? parseSrt(fs.readFileSync(path.join(dir, f), "utf8")) : null;
 }
 
 // Barre des tâches Windows + notification quand l'appli n'est pas au premier plan
@@ -802,29 +1063,37 @@ function notifyEnd(job) {
   }
   if (!mainWindow || mainWindow.isFocused() || !Notification.isSupported() || job.status === "cancelled") return;
   const n = new Notification(job.status === "done"
-    ? { title: job.files.length > 1 ? `✓ ${job.files.length} fichiers téléchargés` : "✓ Téléchargement terminé", body: job.files.map(f => path.basename(f)).join("\n").slice(0, 200), icon: path.join(__dirname, "icon.png") }
-    : { title: "Échec du téléchargement", body: String(job.error || "").slice(0, 200), icon: path.join(__dirname, "icon.png") });
+    ? { title: job.files.length > 1 ? L(`✓ ${job.files.length} fichiers téléchargés`, `✓ ${job.files.length} files downloaded`) : L("✓ Téléchargement terminé", "✓ Download complete"), body: job.files.map(f => path.basename(f)).join("\n").slice(0, 200), icon: path.join(__dirname, "icon.png") }
+    : { title: L("Échec du téléchargement", "Download failed"), body: String(job.error || "").slice(0, 200), icon: path.join(__dirname, "icon.png") });
   n.on("click", () => { if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } });
   n.show();
 }
 
 // Déroulé d'une tâche : téléchargement de chaque extrait, assemblage éventuel, finition éventuelle, rangement.
-async function runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos, speed, mute, sizeMB, name }) {
+async function runJob(job, { info, segments, duration, mode, format, quality, merge, crop, cropPos, speed, mute, sizeMB, name, fx }) {
   const n = segments.length, tempDir = job.tempDir;
-  const post = { gif: format === "gif", crop, cropPos, speed, mute, sizeMB };
+  const post = { gif: format === "gif", crop, cropPos, speed, mute, sizeMB, fill: fx.fill, fade: fx.fade, norm: fx.norm,
+    boomerang: fx.boomerang, text: fx.text, textPos: fx.textPos, logo: fx.logo, logoPos: fx.logoPos, aQuality: fx.aQuality,
+    burnSubs: fx.sub && fx.subsMode === "burn" ? "…" : null }; // remplacé plus bas par le texte réel des sous-titres
   // Répartition de la barre de progression selon les étapes prévues
   const wCrop = needsPost(post) ? 0.3 : 0, wMerge = merge ? 0.05 : 0, wDl = 1 - wCrop - wMerge;
   const setP = (frac, line) => { job.percent = Math.min(99.5, Math.max(0, frac * 100)); if (line) job.line = line; sendProgress(job); };
   const prefix = i => (n > 1 ? `Extrait ${i + 1}/${n} — ` : "");
-  let cookieFile = null;
+  let cookieFile = null, cues = null;
   const produced = [];
   try {
     cookieFile = info.useCookies ? await cookieFileFor(info.url) : null;
+    if (fx.sub) {
+      setP(0, "Récupération des sous-titres…");
+      cues = await fetchSubs(job, info, fx.sub, cookieFile).catch(() => null);
+      if (!cues?.length) { cues = null; post.burnSubs = null; job.note = "sous-titres indisponibles pour cette langue"; }
+    }
     for (let i = 0; i < n && job.status === "running"; i++) {
       const seg = segments[i], segLen = seg.end - seg.start;
       const segDir = path.join(tempDir, "seg-" + i);
       fs.mkdirSync(segDir, { recursive: true });
-      const { args, cut } = buildArgs({ url: info.url, start: seg.start, end: seg.end, duration, mode, format, quality, cookieFile, name }, segDir);
+      const { args, cut } = buildArgs({ url: info.url, start: seg.start, end: seg.end, duration, mode, format, quality, aQuality: fx.aQuality,
+        cookieFile, name: seg.name && !merge ? seg.name : name, ownName: !!seg.name && !merge }, segDir);
       const errLines = [];
       let file = null;
       const base = i / n;
@@ -855,21 +1124,36 @@ async function runJob(job, { info, segments, duration, mode, format, quality, me
     }
     if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
 
+    // Sous-titres de chaque fichier, recalés sur ses extraits
+    const partsOf = i => (merge ? segments : [segments[i]]);
+    const srts = results.map((_, i) => (cues ? srtFor(cues, partsOf(i), speed) : null));
+
     if (needsPost(post)) {
-      const label = [post.gif && "conversion en GIF", crop && "recadrage " + crop, speed !== 1 && "vitesse ×" + String(speed).replace(".", ","), mute && "retrait du son", sizeMB && `taille < ${sizeMB} Mo`].filter(Boolean).join(", ");
+      const label = [post.gif && "conversion en GIF", crop && (fx.fill === "blur" ? "fond flou " : "recadrage ") + crop, speed !== 1 && "vitesse ×" + String(speed).replace(".", ","),
+        fx.boomerang && "boomerang", post.burnSubs && "sous-titres", (fx.text || fx.logo) && "incrustation", (fx.fade || fx.norm) && "son",
+        mute && "retrait du son", sizeMB && `taille < ${sizeMB} Mo`].filter(Boolean).join(", ");
       for (let i = 0; i < results.length && job.status === "running"; i++) {
         const pBase = wDl + wMerge + (i / results.length) * wCrop;
         setP(pBase, (results.length > 1 ? `Fichier ${i + 1}/${results.length} — ` : "") + "Finition : " + label + "…");
-        const d = (await fileDuration(results[i])) || (merge ? segments.reduce((a, s) => a + (s.end - s.start), 0) : segments[i].end - segments[i].start);
-        results[i] = await postProcess(job, results[i], { ...post, duration: d }, f => setP(pBase + f * wCrop / results.length));
+        const m = await probeMedia(results[i]);
+        const d = m.duration || partsOf(i).reduce((a, s) => a + (s.end - s.start), 0);
+        results[i] = await postProcess(job, results[i], { ...post, duration: d, burnSubs: post.burnSubs && srts[i] }, m, f => setP(pBase + f * wCrop / results.length));
       }
     }
     if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
 
     try {
-      for (const f of results) job.files.push(await finalizeFile(f, settings.downloadDir));
+      for (let i = 0; i < results.length; i++) {
+        const dest = await finalizeFile(results[i], settings.downloadDir);
+        job.files.push(dest);
+        // Sous-titres à part : fichier .srt du même nom, à côté de la vidéo (reconnu par les lecteurs)
+        if (srts[i] && fx.subsMode === "file") {
+          const srt = path.join(path.dirname(dest), path.basename(dest, path.extname(dest)) + "." + fx.sub.code + ".srt");
+          if (!fs.existsSync(srt)) { fs.writeFileSync(srt, "﻿" + srts[i]); job.files.push(srt); }
+        }
+      }
     } catch (e) { throw Object.assign(new Error("Impossible d'enregistrer le fichier dans le dossier choisi (" + e.code + ")."), { user: true }); }
-    job.status = "done"; job.percent = 100; job.line = "Terminé !";
+    job.status = "done"; job.percent = 100; job.line = "Terminé !" + (job.note ? ` (${job.note})` : "");
     addHistory({ title: info.title, site: info.site, url: info.url, files: job.files, mode, format, crop, segments: segments.length, merged: merge, speed, mute, sizeMB });
   } catch (e) {
     if (job.status === "cancelled" || e.cancelled) { job.status = "cancelled"; job.line = "Annulé."; }
@@ -1002,18 +1286,18 @@ function createWindow() {
     const f = p.editFlags, items = [];
     if (p.isEditable) {
       items.push(
-        { role: "undo", label: "Annuler", enabled: f.canUndo },
-        { role: "redo", label: "Rétablir", enabled: f.canRedo },
+        { role: "undo", label: L("Annuler", "Undo"), enabled: f.canUndo },
+        { role: "redo", label: L("Rétablir", "Redo"), enabled: f.canRedo },
         { type: "separator" },
-        { role: "cut", label: "Couper", enabled: f.canCut },
-        { role: "copy", label: "Copier", enabled: f.canCopy },
-        { role: "paste", label: "Coller", enabled: f.canPaste },
-        { role: "delete", label: "Supprimer", enabled: f.canDelete },
+        { role: "cut", label: L("Couper", "Cut"), enabled: f.canCut },
+        { role: "copy", label: L("Copier", "Copy"), enabled: f.canCopy },
+        { role: "paste", label: L("Coller", "Paste"), enabled: f.canPaste },
+        { role: "delete", label: L("Supprimer", "Delete"), enabled: f.canDelete },
         { type: "separator" },
-        { role: "selectAll", label: "Tout sélectionner", enabled: f.canSelectAll },
+        { role: "selectAll", label: L("Tout sélectionner", "Select all"), enabled: f.canSelectAll },
       );
     } else if (p.selectionText.trim()) {
-      items.push({ role: "copy", label: "Copier" }, { role: "selectAll", label: "Tout sélectionner" });
+      items.push({ role: "copy", label: L("Copier", "Copy") }, { role: "selectAll", label: L("Tout sélectionner", "Select all") });
     }
     if (items.length) Menu.buildFromTemplate(items).popup({ window: mainWindow });
   });
@@ -1158,9 +1442,35 @@ if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
     setImmediate(() => appUpdater?.quitAndInstall(false, true));
     return true;
   });
-  handle("get-settings", async () => { await ready; return { downloadDir: settings.downloadDir, ytdlp: await ytdlpVersion(), version: app.getVersion(), termsAccepted: termsAccepted(), prefs: settings.prefs || {} }; });
+  handle("get-settings", async () => {
+    await ready;
+    const logo = settings.logo && fs.existsSync(path.join(app.getPath("userData"), settings.logo)) ? settings.logoName || settings.logo : "";
+    return { downloadDir: settings.downloadDir, ytdlp: await ytdlpVersion(), version: app.getVersion(), termsAccepted: termsAccepted(), prefs: settings.prefs || {}, logo };
+  });
   handle("save-prefs", p => { settings.prefs = { ...(settings.prefs || {}), ...sanitizePrefs(p) }; saveSettings(); return true; });
   handle("frame-at", (token, t) => frameAt(token, t));
+  handle("snapshot", o => snapshot(o));
+  handle("save-thumb", o => saveThumb(o));
+  handle("playlist-entries", url => playlistEntries(url));
+  // Logo : choisi par l'utilisateur, copié dans le dossier de l'appli (la fenêtre ne manipule jamais de chemin)
+  handle("choose-logo", async () => {
+    const r = await dialog.showOpenDialog(mainWindow, { title: L("Choisis ton logo", "Choose your logo"), properties: ["openFile"], filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }] });
+    const f = !r.canceled && r.filePaths[0];
+    if (!f) return null;
+    const ext = path.extname(f).toLowerCase().slice(1);
+    if (!["png", "jpg", "jpeg", "webp"].includes(ext) || fs.statSync(f).size > 20 * 1048576) return null;
+    for (const old of fs.readdirSync(app.getPath("userData")).filter(n => /^logo\.(png|jpg|jpeg|webp)$/.test(n))) fs.rmSync(path.join(app.getPath("userData"), old), { force: true });
+    fs.copyFileSync(f, path.join(app.getPath("userData"), "logo." + ext));
+    settings.logo = "logo." + ext; settings.logoName = path.basename(f).slice(0, 120); saveSettings();
+    return settings.logoName;
+  });
+  // Langue lue par le pont (preload) au chargement de la page, avant l'affichage
+  ipcMain.on("get-lang", event => { event.returnValue = trusted(event) ? uiLang() : "fr"; });
+  handle("set-lang", lang => {
+    if (lang !== "fr" && lang !== "en") return false;
+    settings.lang = lang; saveSettings();
+    return true;
+  });
   // Glisser un fichier téléchargé vers un autre logiciel (CapCut, DaVinci, Discord…)
   ipcMain.on("start-drag", (event, id, index) => {
     if (!trusted(event)) return;
@@ -1186,7 +1496,7 @@ if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
     return true;
   });
   handle("choose-folder", async () => {
-    const r = await dialog.showOpenDialog(mainWindow, { title: "Où enregistrer les fichiers ?", defaultPath: settings.downloadDir, properties: ["openDirectory", "createDirectory"] });
+    const r = await dialog.showOpenDialog(mainWindow, { title: L("Où enregistrer les fichiers ?", "Where should files be saved?"), defaultPath: settings.downloadDir, properties: ["openDirectory", "createDirectory"] });
     if (!r.canceled && r.filePaths[0]) { settings.downloadDir = r.filePaths[0]; saveSettings(); }
     return settings.downloadDir;
   });

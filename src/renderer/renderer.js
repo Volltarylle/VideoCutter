@@ -2,6 +2,10 @@
 const $ = id => document.getElementById(id);
 const api = window.videoCutter;
 const YT_ORIGIN = "https://www.youtube-nocookie.com";
+// Traduction (version anglaise) : textes de la page traduits au chargement, textes dynamiques via T()
+const EN = api.lang === "en";
+const T = s => (EN ? window.VC_I18N.tr(s) : s);
+if (EN) window.VC_I18N.translatePage(document);
 
 let info = null, mode = "video", currentJob = null, doneJob = null, previewStop = null;
 
@@ -33,7 +37,7 @@ const yt = {
     f.src = `${YT_ORIGIN}/embed/${encodeURIComponent(id)}?enablejsapi=1&rel=0&playsinline=1&modestbranding=1&cc_load_policy=0&iv_load_policy=3&hl=fr`;
     f.allow = "autoplay; encrypted-media; picture-in-picture; fullscreen";
     f.referrerPolicy = "strict-origin";
-    f.title = "Aperçu de la vidéo";
+    f.title = T("Aperçu de la vidéo");
     f.addEventListener("load", () => this.post({ event: "listening", id: 1, channel: "widget" }));
     $("player").replaceChildren(f);
     this.frame = f; this.time = 0; this.stamp = performance.now(); this.playing = false;
@@ -77,7 +81,7 @@ function showStill(j, message) {
     nodes.push(img);
   }
   const p = document.createElement("div");
-  p.className = "placeholder"; p.textContent = message;
+  p.className = "placeholder"; p.textContent = T(message);
   nodes.push(p);
   $("player").replaceChildren(...nodes);
   player.kind = "none"; media = null; yt.frame = null;
@@ -146,7 +150,7 @@ requestAnimationFrame(tick);
 // ---------------------------------------------------------------------------
 let loginTarget = null;
 function showLoadError(msg, loginUrl) {
-  $("loadErr").textContent = msg; $("loadErr").hidden = false;
+  $("loadErr").textContent = T(msg); $("loadErr").hidden = false;
   if (!currentJob) { $("editor").hidden = true; player.pause(); info = null; } // ne pas laisser croire que l'ancienne vidéo correspond au lien
   loginTarget = loginUrl || null;
   $("loginHere").hidden = !loginTarget;
@@ -156,7 +160,7 @@ function showLoadError(msg, loginUrl) {
 const qLabel = h => (h >= 2160 ? "4K" : h >= 1440 ? "1440p (2K)" : h + "p");
 function fillQualities(heights) {
   const sel = $("quality");
-  const opts = [new Option(heights.length ? `Auto (meilleure : ${qLabel(heights[0])})` : "Auto (meilleure disponible)", "auto")];
+  const opts = [new Option(heights.length ? T("Auto (meilleure : ") + qLabel(heights[0]) + ")" : T("Auto (meilleure disponible)"), "auto")];
   for (const h of heights) opts.push(new Option(qLabel(h), String(h)));
   sel.replaceChildren(...opts);
   sel.value = "auto";
@@ -167,7 +171,7 @@ $("urlForm").addEventListener("submit", async e => {
   const url = $("url").value.trim();
   if (!url) return;
   $("loadErr").hidden = true; $("loginHere").hidden = true;
-  $("loadBtn").disabled = true; $("loadBtn").textContent = "Chargement…";
+  $("loadBtn").disabled = true; $("loadBtn").textContent = T("Chargement…");
   try {
     const j = await Promise.race([
       api.info(url),
@@ -178,7 +182,7 @@ $("urlForm").addEventListener("submit", async e => {
     info = j;
     previewStop = null;
     $("title").textContent = j.title;
-    $("channel").textContent = [j.site, j.channel, j.loggedIn ? "🔑 via ta connexion" : ""].filter(Boolean).join(" · ");
+    $("channel").textContent = [j.site, j.channel, j.loggedIn ? T("🔑 via ta connexion") : ""].filter(Boolean).join(" · ");
     fillQualities(j.heights || []);
 
     // Durée inconnue : pas de découpe possible, téléchargement complet
@@ -187,18 +191,24 @@ $("urlForm").addEventListener("submit", async e => {
     if (j.duration) {
       zoomIdx = 0; info.start = 0; info.end = j.duration;
       setView(j.duration / 2);
-      setRange(0, j.duration);
+      setRange(j.startAt || 0, j.duration); // lien avec ?t=… : le passage commence à cet instant
     } else {
       info.start = info.end = 0;
-      $("dlBtn").textContent = "Télécharger la vidéo entière";
+      $("dlBtn").textContent = T("Télécharger la vidéo entière");
     }
+    fillChapters(j.chapters || []);
+    fillSubs(j.subs || []);
+    $("thumbLink").hidden = !j.thumb;
+    $("playlistLink").hidden = !j.isPlaylist;
+    $("snapBtn").disabled = !j.still || !j.duration;
+    $("snapMsg").hidden = true;
 
     // Son seul (ex. SoundCloud) : Musique imposée ; vidéo muette : Vidéo imposée
     const videoBtn = $("modeSeg").querySelector("[data-mode=video]");
     const audioBtn = $("modeSeg").querySelector("[data-mode=audio]");
     videoBtn.disabled = !j.hasVideo;
     audioBtn.disabled = !j.hasAudio;
-    audioBtn.title = j.hasAudio ? "" : "Cette vidéo n'a pas de son";
+    audioBtn.title = j.hasAudio ? "" : T("Cette vidéo n'a pas de son");
     if (!j.hasVideo && mode === "video") audioBtn.click();
     if (!j.hasAudio && mode === "audio") videoBtn.click();
 
@@ -207,7 +217,8 @@ $("urlForm").addEventListener("submit", async e => {
     $("editor").hidden = false;
     if (!currentJob) $("progress").hidden = true;
     loadPlayer(j);
-    updateCropUI();
+    if (j.startAt) setTimeout(() => player.seek(j.startAt), player.kind === "youtube" ? 1500 : 0);
+    updateFormatUI(); // options propres à cette vidéo (sous-titres…) + cadre de recadrage
     lastClip = j.url; $("clipSuggest").hidden = true;
     nameEdited = false; fillName();
     for (const img of [$("frameStart"), $("frameEnd")]) img.removeAttribute("src");
@@ -217,7 +228,7 @@ $("urlForm").addEventListener("submit", async e => {
   } catch {
     showLoadError("Erreur inattendue. Réessaie.");
   } finally {
-    $("loadBtn").disabled = false; $("loadBtn").textContent = "Charger";
+    $("loadBtn").disabled = false; $("loadBtn").textContent = T("Charger");
   }
 });
 
@@ -248,9 +259,13 @@ function drawRange() {
 }
 function updateDlLabel() {
   if (!info) return;
-  if (segments.length) { $("dlBtn").textContent = segments.length > 1 ? `Télécharger les ${segments.length} extraits` : "Télécharger l'extrait de la liste"; return; }
+  if (segments.length) {
+    const joined = document.querySelector("input[name=merge]:checked")?.value === "1";
+    $("dlBtn").textContent = segments.length > 1 ? T(`Télécharger les ${segments.length} extraits${joined ? " recollés" : ""}`) : T("Télécharger l'extrait de la liste");
+    return;
+  }
   const d = info.duration;
-  $("dlBtn").textContent = !d || (info.start < 0.05 && info.end > d - 0.05) ? "Télécharger la vidéo entière" : "Télécharger l'extrait";
+  $("dlBtn").textContent = T(!d || (info.start < 0.05 && info.end > d - 0.05) ? "Télécharger la vidéo entière" : "Télécharger l'extrait");
 }
 $("startR").addEventListener("input", () => { setRange(+$("startR").value, info.end, "start"); player.seek(info.start); });
 $("endR").addEventListener("input", () => { setRange(info.start, +$("endR").value, "end"); player.seek(info.end); });
@@ -274,11 +289,19 @@ const isGif = () => mode === "video" && $("vFormat").value === "gif";
 // Affiche seulement les réglages qui ont du sens pour le mode et le format choisis
 function updateFormatUI() {
   const video = mode === "video", gif = isGif();
+  const lossless = ["wav", "flac"].includes($("aFormat").value);
   $("vFormat").hidden = !video;
   $("aFormat").hidden = video;
   $("quality").hidden = !video || gif;          // le GIF est toujours en 480 px
+  $("aQuality").hidden = video || lossless;     // WAV / FLAC : sans perte, pas de débit à choisir
   $("cropRow").hidden = !video;
+  $("fillRow").hidden = !video || !crop;
   $("muteRow").hidden = $("sizeRow").hidden = !video || gif; // un GIF n'a pas de son ; taille réglée par la largeur
+  $("normRow").hidden = gif;
+  $("soundRow").hidden = gif;
+  $("boomRow").hidden = !video;
+  $("textRow").hidden = $("logoRow").hidden = !video;
+  $("subsRow").hidden = !video || !info?.subs?.length || !info.duration;
   $("gifNote").hidden = !gif;
   updateCropUI();
   updateOptSummary();
@@ -287,9 +310,13 @@ function updateFormatUI() {
 function updateOptSummary() {
   const video = mode === "video", gif = isGif(), sp = Number($("speed").value);
   const parts = [
-    video && crop, sp !== 1 && "×" + String(sp).replace(".", ","),
-    video && !gif && $("mute").checked && "sans son",
-    video && !gif && Number($("sizeMB").value) && "≤ " + $("sizeMB").value + " Mo",
+    video && crop && crop + (fill === "blur" ? T(" flou") : ""), sp !== 1 && "×" + String(sp).replace(".", ","),
+    video && !gif && $("mute").checked && T("sans son"),
+    !gif && !(video && $("mute").checked) && $("norm").checked && T("volume"),
+    $("fade").checked && T("fondu"), video && $("boomerang").checked && T("boomerang"),
+    video && $("overlayText").value.trim() && T("texte"), video && $("logoPos").value && T("logo"),
+    video && !$("subsRow").hidden && $("subsLang").value && T("sous-titres"),
+    video && !gif && Number($("sizeMB").value) && "≤ " + $("sizeMB").value + T(" Mo"),
   ].filter(Boolean);
   $("optSummary").textContent = parts.length ? "· " + parts.join(" · ") : "";
 }
@@ -301,23 +328,64 @@ $("modeSeg").addEventListener("click", e => {
   updateEstimate();
   savePrefs();
 });
-for (const id of ["vFormat", "speed", "sizeMB", "mute"]) $(id).addEventListener("change", updateFormatUI);
+for (const id of ["vFormat", "aFormat", "speed", "sizeMB", "mute", "norm", "fade", "boomerang", "textPos", "subsLang", "subsMode"]) $(id).addEventListener("change", updateFormatUI);
+$("overlayText").addEventListener("input", updateOptSummary);
+
+// Cadrage : rogner (cadre à déplacer) ou garder toute l'image sur un fond flou
+let fill = "crop";
+$("fillSeg").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  fill = b.dataset.fill;
+  for (const x of $("fillSeg").children) x.classList.toggle("on", x === b);
+  updateCropUI(); updateOptSummary(); updateEstimate(); savePrefs();
+});
+
+// Logo : image choisie une fois (copiée par l'appli), puis placée dans un coin
+function showLogoName(name) { $("logoName").textContent = name || ""; $("logoPick").textContent = T(name ? "Changer…" : "Choisir l'image…"); }
+async function pickLogo() {
+  const name = await api.chooseLogo().catch(() => null);
+  if (name) { showLogoName(name); if (!$("logoPos").value) $("logoPos").value = "tr"; }
+  return name;
+}
+$("logoPick").onclick = () => pickLogo().then(() => { updateOptSummary(); savePrefs(); });
+$("logoPos").addEventListener("change", async () => {
+  if ($("logoPos").value && !$("logoName").textContent && !(await pickLogo())) $("logoPos").value = "";
+  updateOptSummary(); savePrefs();
+});
+
+// Sous-titres proposés par le site pour cette vidéo
+function fillSubs(list) {
+  const keep = $("subsLang").value;
+  $("subsLang").replaceChildren(new Option(T("Aucun"), ""), ...list.map(s => new Option(s.label + (s.auto ? T(" (auto)") : ""), s.code)));
+  $("subsLang").value = list.some(s => s.code === keep) ? keep : "";
+}
 
 // Menu « ⋯ » du pied de page
 $("moreLink").onclick = e => { e.preventDefault(); e.stopPropagation(); $("moreMenu").hidden = !$("moreMenu").hidden; };
 document.addEventListener("click", e => { if (!$("moreMenu").hidden && !e.target.closest(".more")) $("moreMenu").hidden = true; });
 document.addEventListener("keydown", e => { if (e.key === "Escape") $("moreMenu").hidden = true; });
 for (const id of ["termsLink", "aboutLink"]) $(id).addEventListener("click", () => { $("moreMenu").hidden = true; });
+// Langue : bascule français / anglais, la page est rechargée (les choix mémorisés sont gardés)
+$("langLink").textContent = EN ? "Français" : "English";
+$("langLink").lang = EN ? "fr" : "en";
+$("langLink").onclick = async e => {
+  e.preventDefault();
+  if (currentJob && !confirm(T("Un téléchargement est en cours : il sera annulé. Continuer ?"))) return;
+  if (currentJob) await api.cancel(currentJob);
+  await api.setLang(EN ? "fr" : "en");
+  location.reload();
+};
 
 // ---------------------------------------------------------------------------
 // Recadrage 9:16 / 1:1 : cadre déplaçable sur l'aperçu
 // ---------------------------------------------------------------------------
 let crop = "", cropPos = 0.5;
-const CROP_RATIOS = { "9:16": 9 / 16, "1:1": 1 };
+const CROP_RATIOS = { "9:16": 9 / 16, "1:1": 1, "4:5": 4 / 5 };
 $("cropSeg").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   crop = b.dataset.crop;
   for (const x of $("cropSeg").children) x.classList.toggle("on", x === b);
+  $("fillRow").hidden = mode !== "video" || !crop;
   updateCropUI();
   updateOptSummary();
   updateEstimate();
@@ -333,7 +401,7 @@ function videoRect() {
   return { left: (box.width - w) / 2, top: (box.height - h) / 2, w, h };
 }
 function updateCropUI() {
-  const active = !!crop && mode === "video" && !!info;
+  const active = !!crop && mode === "video" && !!info && fill !== "blur"; // fond flou : toute l'image est gardée
   $("cropNote").hidden = !active;
   $("cropLayer").hidden = !active;
   if (!active) return;
@@ -386,14 +454,14 @@ function renderSegments() {
     const li = document.createElement("li");
     const row = document.createElement("div");
     const t = document.createElement("span");
-    t.className = "t"; t.title = "Revoir / modifier ce passage";
-    t.textContent = `${fmt(s.start)} → ${fmt(s.end)}  (${fmt(s.end - s.start)})`;
+    t.className = "t"; t.title = T("Revoir / modifier ce passage");
+    t.textContent = `${fmt(s.start)} → ${fmt(s.end)}  (${fmt(s.end - s.start)})` + (s.name ? "  " + s.name : "");
     t.onclick = () => { setRange(s.start, s.end); player.seek(s.start); };
     const actions = document.createElement("span"); actions.className = "row";
     const play = document.createElement("button"); play.type = "button"; play.className = "small"; play.textContent = "▶";
-    play.title = "Écouter"; play.onclick = () => { player.seek(s.start); player.play(); previewStop = s.end; };
+    play.title = T("Écouter"); play.onclick = () => { player.seek(s.start); player.play(); previewStop = s.end; };
     const del = document.createElement("button"); del.type = "button"; del.className = "small"; del.textContent = "✕";
-    del.title = "Retirer"; del.onclick = () => { segments.splice(i, 1); renderSegments(); };
+    del.title = T("Retirer"); del.onclick = () => { segments.splice(i, 1); renderSegments(); };
     actions.append(play, del);
     row.append(t, actions); li.append(row);
     return li;
@@ -411,6 +479,47 @@ function addSegment() {
 }
 $("addSeg").onclick = addSegment;
 $("segClear").onclick = () => { segments = []; renderSegments(); };
+const setMerge = on => { document.querySelector(`input[name=merge][value="${on ? 1 : 0}"]`).checked = true; };
+
+// « Enlever » : le passage choisi (ou ceux de la liste) est retiré, tout le reste est gardé et recollé
+function removeSelection() {
+  if (!info?.duration) return;
+  const d = info.duration, cuts = (segments.length ? segments : [{ start: info.start, end: info.end }]).slice().sort((a, b) => a.start - b.start);
+  const keep = [];
+  let t = 0;
+  for (const c of cuts) { if (c.start - t >= 0.3) keep.push({ start: t, end: c.start }); t = Math.max(t, c.end); }
+  if (d - t >= 0.3) keep.push({ start: t, end: d });
+  if (!keep.length || keep.length > 20) return;
+  segments = keep;
+  setMerge(keep.length > 1);
+  renderSegments();
+  $("segBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+$("removeSeg").onclick = removeSelection;
+
+// Chapitres de la vidéo : choisir un chapitre règle le passage ; « tous » les met dans la liste, un fichier chacun
+function fillChapters(list) {
+  const sel = $("chapterSel");
+  sel.hidden = !list.length;
+  if (!list.length) { sel.replaceChildren(); return; }
+  sel.replaceChildren(new Option(T(`Chapitres (${list.length})…`), ""),
+    ...list.map((c, i) => new Option(`${fmt(c.start).replace(/\.\d$/, "")}  ${c.title || T("Chapitre ") + (i + 1)}`, String(i))),
+    new Option(T("↳ Tous les chapitres, un fichier chacun"), "all"));
+  sel.value = "";
+}
+$("chapterSel").addEventListener("change", () => {
+  const list = info?.chapters || [], v = $("chapterSel").value;
+  $("chapterSel").value = "";
+  if (v === "all") {
+    const base = $("fileName").value.trim() || info.title;
+    segments = list.slice(0, 20).map((c, i) => ({ start: c.start, end: Math.min(c.end, info.duration), name: `${base} - ${String(i + 1).padStart(2, "0")} ${c.title}`.slice(0, 150) }));
+    setMerge(false);
+    renderSegments();
+    return;
+  }
+  const c = list[Number(v)];
+  if (c) { setRange(c.start, Math.min(c.end, info.duration)); ensureVisible(c.start); player.seek(c.start); }
+});
 
 // ---------------------------------------------------------------------------
 // Miniatures du début et de la fin de l'extrait (images extraites par le moteur)
@@ -459,36 +568,39 @@ $("cleanNames").addEventListener("change", () => { nameEdited = false; fillName(
 // ---------------------------------------------------------------------------
 const AUDIO_KBPS = { mp3: 245, wav: 1411, flac: 900, m4a: 256, ogg: 192, opus: 160 };
 function humanSize(bytes) {
-  if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(1).replace(".", ",") + " Go";
-  if (bytes >= 1024 ** 2) return Math.round(bytes / 1024 ** 2) + " Mo";
-  return Math.max(1, Math.round(bytes / 1024)) + " Ko";
+  if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(1).replace(".", EN ? "." : ",") + T(" Go");
+  if (bytes >= 1024 ** 2) return Math.round(bytes / 1024 ** 2) + T(" Mo");
+  return Math.max(1, Math.round(bytes / 1024)) + T(" Ko");
 }
 function updateEstimate() {
   const out = $("sizeEst");
   if (!info) { out.textContent = "—"; return; }
   const speed = Number($("speed").value) || 1;
   const lens = segments.length ? segments.map(s => s.end - s.start) : [info.duration ? info.end - info.start : 0];
-  const total = lens.reduce((a, b) => a + b, 0) / speed;
-  if (!total) { out.textContent = "inconnue (durée non fournie par le site)"; return; }
+  const total = lens.reduce((a, b) => a + b, 0) / speed * (mode === "video" && $("boomerang").checked ? 2 : 1);
+  if (!total) { out.textContent = T("inconnue (durée non fournie par le site)"); return; }
+  // Part de l'image gardée (rogné) ou taille de l'image finale (fond flou), par rapport à l'originale
+  const aspect = info.width && info.height ? info.width / info.height : 16 / 9, r = CROP_RATIOS[crop];
+  const area = !r ? 1 : fill === "blur" ? (aspect >= r ? 1 / (aspect * r) : aspect / r) : Math.min(r / aspect, aspect / r);
   let kbps;
-  if (mode === "audio") kbps = AUDIO_KBPS[$("aFormat").value] || 192;
-  else if (isGif()) kbps = 5500 * (crop === "1:1" ? 1.6 : 1); // mesuré : GIF 480 px / 12 i/s ≈ 680 Ko par seconde (carré 480×480 : plus lourd)
+  if (mode === "audio") kbps = $("aQuality").hidden || $("aQuality").value === "0" ? AUDIO_KBPS[$("aFormat").value] || 192 : Number($("aQuality").value);
+  // Mesuré : GIF 480 px / 12 i/s ≈ 680 Ko par seconde en paysage ; vertical / carré : 480 px de haut, donc plus lourd selon la largeur
+  else if (isGif()) kbps = 5500 * (r ? 1.6 * r * (fill === "blur" ? 1.1 : 1) : 1);
   else {
     const hs = info.heights || [], q = $("quality").value;
     const h = q === "auto" ? hs[0] : Number(q);
     const vk = info.rates?.video?.[h] || Object.values(info.rates?.video || {})[0];
-    if (!vk) { out.textContent = "inconnue pour ce site"; return; }
-    const area = crop === "9:16" ? 0.32 : crop === "1:1" ? 0.56 : 1; // part de l'image conservée
+    if (!vk) { out.textContent = T("inconnue pour ce site"); return; }
     kbps = vk * area + ($("mute").checked ? 0 : info.rates.audio || 128);
   }
   let bytes = (kbps * 1000 / 8) * total;
   const target = mode === "video" && !isGif() ? Number($("sizeMB").value) * 1024 * 1024 : 0;
   const files = segments.length > 1 && document.querySelector("input[name=merge]:checked")?.value !== "1" ? segments.length : 1;
   if (target) bytes = Math.min(bytes, target * files);
-  out.textContent = "≈ " + humanSize(bytes) + (files > 1 ? ` au total (${files} fichiers)` : "") + (target ? ` · maxi ${$("sizeMB").value} Mo par fichier` : "");
+  out.textContent = "≈ " + humanSize(bytes) + (files > 1 ? T(` au total (${files} fichiers)`) : "") + (target ? T(` · maxi ${$("sizeMB").value} Mo par fichier`) : "");
 }
-for (const id of ["quality", "vFormat", "aFormat", "speed", "sizeMB", "mute"]) $(id).addEventListener("change", () => { updateEstimate(); savePrefs(); });
-for (const r of document.querySelectorAll("input[name=merge]")) r.addEventListener("change", () => { updateEstimate(); savePrefs(); });
+for (const id of ["quality", "aQuality", "vFormat", "aFormat", "speed", "sizeMB", "mute", "norm", "fade", "boomerang", "textPos", "logoPos", "subsMode"]) $(id).addEventListener("change", () => { updateEstimate(); savePrefs(); });
+for (const r of document.querySelectorAll("input[name=merge]")) r.addEventListener("change", () => { updateEstimate(); updateDlLabel(); savePrefs(); });
 
 // ---------------------------------------------------------------------------
 // Derniers choix mémorisés d'une ouverture à l'autre
@@ -498,19 +610,23 @@ function savePrefs() {
   if (!prefsReady) return;
   clearTimeout(prefsTimer);
   prefsTimer = setTimeout(() => api.savePrefs({
-    mode, vFormat: $("vFormat").value, aFormat: $("aFormat").value, crop, speed: Number($("speed").value),
+    mode, vFormat: $("vFormat").value, aFormat: $("aFormat").value, crop, fill, speed: Number($("speed").value),
     sizeMB: Number($("sizeMB").value), merge: document.querySelector("input[name=merge]:checked")?.value === "1",
-    mute: $("mute").checked, cleanNames: $("cleanNames").checked,
+    mute: $("mute").checked, cleanNames: $("cleanNames").checked, aQuality: $("aQuality").value,
+    fade: $("fade").checked, norm: $("norm").checked, logoPos: $("logoPos").value, textPos: $("textPos").value, subsMode: $("subsMode").value,
   }), 300);
 }
 function applyPrefs(p) {
   if (p.vFormat) $("vFormat").value = p.vFormat;
   if (p.aFormat) $("aFormat").value = p.aFormat;
+  if (p.aQuality) $("aQuality").value = p.aQuality;
   if (p.speed) $("speed").value = String(p.speed);
   if (p.sizeMB !== undefined) $("sizeMB").value = String(p.sizeMB);
-  if (typeof p.mute === "boolean") $("mute").checked = p.mute;
-  if (typeof p.cleanNames === "boolean") $("cleanNames").checked = p.cleanNames;
-  if (typeof p.merge === "boolean") document.querySelector(`input[name=merge][value="${p.merge ? 1 : 0}"]`).checked = true;
+  for (const k of ["mute", "cleanNames", "fade", "norm"]) if (typeof p[k] === "boolean") $(k).checked = p[k];
+  for (const k of ["textPos", "subsMode"]) if (p[k]) $(k).value = p[k];
+  if (p.logoPos && $("logoName").textContent) $("logoPos").value = p.logoPos; // seulement si un logo a déjà été choisi
+  if (typeof p.merge === "boolean") setMerge(p.merge);
+  if (p.fill) $("fillSeg").querySelector(`[data-fill="${p.fill}"]`)?.click();
   if (p.crop !== undefined) $("cropSeg").querySelector(`[data-crop="${p.crop}"]`)?.click();
   if (p.mode) $("modeSeg").querySelector(`[data-mode="${p.mode}"]`)?.click();
   updateFormatUI();
@@ -522,9 +638,14 @@ function currentOpts() {
   return {
     mode, format: mode === "audio" ? $("aFormat").value : $("vFormat").value, quality: $("quality").value,
     merge: document.querySelector("input[name=merge]:checked")?.value === "1",
-    crop: mode === "video" ? crop : "", cropPos,
+    crop: mode === "video" ? crop : "", cropPos, fill,
     speed: Number($("speed").value) || 1, mute: mode === "video" && !isGif() && $("mute").checked,
     sizeMB: mode === "video" && !isGif() ? Number($("sizeMB").value) : 0,
+    aQuality: $("aQuality").value, fade: $("fade").checked, norm: $("norm").checked,
+    boomerang: mode === "video" && $("boomerang").checked,
+    text: mode === "video" ? $("overlayText").value.trim() : "", textPos: $("textPos").value,
+    logoPos: mode === "video" ? $("logoPos").value : "",
+    subsLang: mode === "video" && !$("subsRow").hidden ? $("subsLang").value : "", subsMode: $("subsMode").value,
   };
 }
 
@@ -535,7 +656,7 @@ function resetProgressUI() {
   $("progress").hidden = false;
   $("result").hidden = true; $("dlErr").hidden = true;
   $("bar").classList.add("indet"); $("bar").firstElementChild.style.width = "";
-  $("status").textContent = "Démarrage…";
+  $("status").textContent = T("Démarrage…");
   $("cancelBtn").hidden = false;
 }
 function finish() { currentJob = null; $("dlBtn").disabled = false; $("cancelBtn").hidden = true; }
@@ -546,7 +667,7 @@ $("dlBtn").onclick = async () => {
   const r = await api.download({
     ...currentOpts(), token: info.token, start: info.start, end: info.end, segments, name: $("fileName").value.trim(),
   }).catch(() => ({ error: "Erreur inattendue." }));
-  if (r.error) { finish(); $("bar").classList.remove("indet"); $("dlErr").textContent = r.error; $("dlErr").hidden = false; return; }
+  if (r.error) { finish(); $("bar").classList.remove("indet"); $("dlErr").textContent = T(r.error); $("dlErr").hidden = false; return; }
   currentJob = r.id;
 };
 $("cancelBtn").onclick = () => currentJob && api.cancel(currentJob);
@@ -555,20 +676,20 @@ api.onProgress(p => {
   if (queueProgress(p)) return; // téléchargement lancé par la file d'attente
   if (p.id !== currentJob) return;
   if (p.percent != null) { $("bar").classList.remove("indet"); $("bar").firstElementChild.style.width = p.percent + "%"; }
-  $("status").textContent = p.line + (p.percent != null && p.status === "running" ? ` ${Math.round(p.percent)} %` : "");
+  $("status").textContent = T(p.line) + (p.percent != null && p.status === "running" ? ` ${Math.round(p.percent)} %` : "");
   if (p.status === "running") return;
   finish();
   if (p.status === "done") {
     doneJob = p.id;
     const files = p.files || [];
-    $("doneText").textContent = files.length > 1 ? `✓ ${files.length} fichiers enregistrés` : "✓ Fichier enregistré";
+    $("doneText").textContent = files.length > 1 ? T(`✓ ${files.length} fichiers enregistrés`) : T("✓ Fichier enregistré");
     renderFileList(p.id, files);
     $("result").hidden = false;
   } else if (p.status === "cancelled") {
     $("bar").classList.remove("indet"); $("bar").firstElementChild.style.width = "0";
   } else {
     $("bar").classList.remove("indet");
-    $("dlErr").textContent = "Échec : " + p.error; $("dlErr").hidden = false;
+    $("dlErr").textContent = T("Échec : ") + T(p.error); $("dlErr").hidden = false;
   }
 });
 $("reveal").onclick = () => doneJob && api.reveal(doneJob);
@@ -579,7 +700,7 @@ function renderFileList(jobId, files) {
   $("fileList").replaceChildren(...files.map((name, i) => {
     const li = document.createElement("li");
     li.draggable = true;
-    li.title = "Glisse ce fichier vers ton logiciel de montage, Discord, un dossier…";
+    li.title = T("Glisse ce fichier vers ton logiciel de montage, Discord, un dossier…");
     const grip = document.createElement("span"); grip.className = "grip"; grip.textContent = "⠿";
     const label = document.createElement("span"); label.textContent = name;
     li.append(grip, label);
@@ -589,6 +710,53 @@ function renderFileList(jobId, files) {
 }
 
 // ---------------------------------------------------------------------------
+// Images : capture de l'image affichée (PNG) et miniature de la vidéo
+// ---------------------------------------------------------------------------
+function showSnap(r) {
+  const box = $("snapMsg");
+  box.hidden = false;
+  if (r.error) { box.className = "snap-msg err"; box.textContent = T(r.error); return; }
+  box.className = "snap-msg";
+  const item = document.createElement("span");
+  item.className = "snap-file"; item.draggable = true; item.textContent = "✓ " + r.file;
+  item.title = T("Glisse ce fichier vers ton logiciel de montage, Discord, un dossier…");
+  item.addEventListener("dragstart", e => { e.preventDefault(); api.startDrag(r.id, 0); });
+  const open = document.createElement("a"); open.href = "#"; open.textContent = T("Ouvrir");
+  open.onclick = e => { e.preventDefault(); api.openFile(r.id); };
+  const show = document.createElement("a"); show.href = "#"; show.textContent = T("Dossier");
+  show.onclick = e => { e.preventDefault(); api.reveal(r.id); };
+  box.replaceChildren(item, open, show);
+}
+async function takeSnapshot() {
+  if (!info?.still || !info.duration || $("snapBtn").disabled) return;
+  const b = $("snapBtn");
+  b.disabled = true;
+  const r = await api.snapshot({ token: info.token, t: player.kind === "none" ? info.start : player.now(), crop: mode === "video" ? crop : "", cropPos, fill, name: $("fileName").value.trim() })
+    .catch(() => ({ error: "Erreur inattendue." }));
+  b.disabled = false;
+  showSnap(r);
+}
+$("snapBtn").onclick = takeSnapshot;
+$("thumbLink").onclick = async e => {
+  e.preventDefault();
+  if (!info) return;
+  showSnap(await api.saveThumb({ token: info.token, name: $("fileName").value.trim() }).catch(() => ({ error: "Erreur inattendue." })));
+};
+$("playlistLink").onclick = async e => {
+  e.preventDefault();
+  if (!info) return;
+  const link = $("playlistLink"), label = link.textContent;
+  link.textContent = T("📃 Lecture de la playlist…");
+  const n = await addPlaylistToQueue($("url").value.trim() || info.url);
+  link.textContent = label;
+  showSnap(typeof n === "string" ? { error: n } : { id: null, file: "" });
+  if (typeof n === "number") {
+    $("snapMsg").textContent = T(`✓ ${n} vidéos ajoutées à la file d'attente`);
+    openQueuePanel();
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Pied de page : dossier + version de yt-dlp
 // ---------------------------------------------------------------------------
 async function refreshSettings() {
@@ -596,6 +764,7 @@ async function refreshSettings() {
   $("folderLink").textContent = s.downloadDir;
   $("ytVer").textContent = s.ytdlp || "?";
   $("appVer").textContent = s.version ? "v" + s.version : "";
+  showLogoName(s.logo);
   if (!prefsReady) applyPrefs(s.prefs || {});
 }
 $("folderLink").onclick = e => { e.preventDefault(); api.openFolder(); };
@@ -603,13 +772,13 @@ $("changeFolder").onclick = async e => { e.preventDefault(); $("folderLink").tex
 $("updateLink").onclick = async e => {
   e.preventDefault();
   const link = $("updateLink");
-  link.textContent = "recherche…";
+  link.textContent = T("recherche…");
   const r = await api.updateYtdlp();
-  link.textContent = r.busy ? "attends la fin du téléchargement"
+  link.textContent = T(r.busy ? "attends la fin du téléchargement"
     : r.error ? "échec de la mise à jour"
-    : r.updated ? "mis à jour ✓" : "déjà à jour ✓";
+    : r.updated ? "mis à jour ✓" : "déjà à jour ✓");
   refreshSettings();
-  setTimeout(() => { link.textContent = "Mettre à jour yt-dlp"; }, 4000);
+  setTimeout(() => { link.textContent = T("Mettre à jour yt-dlp"); }, 4000);
 };
 api.onYtdlpUpdated(() => refreshSettings());
 refreshSettings();
@@ -623,12 +792,12 @@ async function refreshLogins() {
     const li = document.createElement("li");
     const name = document.createElement("span"); name.textContent = domain;
     const btn = document.createElement("button");
-    btn.type = "button"; btn.className = "small"; btn.textContent = "Déconnecter";
+    btn.type = "button"; btn.className = "small"; btn.textContent = T("Déconnecter");
     btn.onclick = async () => { btn.disabled = true; await api.loginForget(domain); refreshLogins(); };
     li.append(name, btn);
     return li;
   });
-  if (!items.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = "Aucune connexion enregistrée."; items.push(li); }
+  if (!items.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = T("Aucune connexion enregistrée."); items.push(li); }
   $("loginList").replaceChildren(...items);
   $("loginForgetAll").hidden = !list.length;
 }
@@ -643,7 +812,7 @@ $("loginOther").addEventListener("submit", async e => {
   if (!ok) $("loginUrl").select();
 });
 $("loginForgetAll").onclick = async () => {
-  if (!confirm("Se déconnecter de tous les sites dans l'appli ?")) return;
+  if (!confirm(T("Se déconnecter de tous les sites dans l'appli ?"))) return;
   await api.loginForgetAll(); refreshLogins();
 };
 $("loginHere").onclick = () => loginTarget && api.loginOpen(loginTarget);
@@ -709,6 +878,8 @@ document.addEventListener("keydown", e => {
     case "o": if (hasCut) setRange(info.start, player.now(), "end"); break;
     case "p": if (hasCut) $("preview").click(); break;
     case "a": if (hasCut) addSegment(); break;
+    case "x": if (hasCut) removeSelection(); break;
+    case "s": takeSnapshot(); break;
     case "arrowleft": player.seek(Math.max(0, player.now() - step)); break;
     case "arrowright": player.seek(Math.min(info.duration || Infinity, player.now() + step)); break;
     default: return;
@@ -769,23 +940,23 @@ async function refreshHistory() {
     const info2 = document.createElement("div");
     const title = document.createElement("div"); title.className = "h-title"; title.textContent = h.title;
     const meta = document.createElement("div"); meta.className = "h-meta";
-    const date = new Date(h.date).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
-    const what = [h.format.toUpperCase(), h.crop, h.segments > 1 ? `${h.segments} extraits${h.merged ? " recollés" : ""}` : ""].filter(Boolean).join(" · ");
-    meta.textContent = [h.site, date, what, h.exists ? "" : "fichier introuvable"].filter(Boolean).join(" · ");
+    const date = new Date(h.date).toLocaleString(EN ? "en-GB" : "fr-FR", { dateStyle: "short", timeStyle: "short" });
+    const what = [h.format.toUpperCase(), h.crop, h.segments > 1 ? T(`${h.segments} extraits${h.merged ? " recollés" : ""}`) : ""].filter(Boolean).join(" · ");
+    meta.textContent = [h.site, date, what, h.exists ? "" : T("fichier introuvable")].filter(Boolean).join(" · ");
     info2.append(title, meta);
     const actions = document.createElement("div"); actions.className = "h-actions";
     const open = document.createElement("button"); open.type = "button"; open.className = "small"; open.textContent = "📂";
-    open.title = "Afficher dans le dossier"; open.disabled = !h.exists; open.onclick = () => api.historyReveal(h.id);
+    open.title = T("Afficher dans le dossier"); open.disabled = !h.exists; open.onclick = () => api.historyReveal(h.id);
     const again = document.createElement("button"); again.type = "button"; again.className = "small"; again.textContent = "↻";
-    again.title = "Recharger cette vidéo"; again.disabled = !h.url;
+    again.title = T("Recharger cette vidéo"); again.disabled = !h.url;
     again.onclick = () => { $("url").value = h.url; $("historyPanel").hidden = true; $("urlForm").requestSubmit(); window.scrollTo({ top: 0, behavior: "smooth" }); };
     const del = document.createElement("button"); del.type = "button"; del.className = "small"; del.textContent = "✕";
-    del.title = "Retirer de l'historique"; del.onclick = async () => { await api.historyRemove(h.id); refreshHistory(); };
+    del.title = T("Retirer de l'historique"); del.onclick = async () => { await api.historyRemove(h.id); refreshHistory(); };
     actions.append(open, again, del);
     li.append(info2, actions);
     return li;
   });
-  if (!items.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = "Aucun téléchargement pour l'instant."; items.push(li); }
+  if (!items.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = T("Aucun téléchargement pour l'instant."); items.push(li); }
   $("historyList").replaceChildren(...items);
   $("historyClear").hidden = !list.length;
 }
@@ -796,7 +967,7 @@ $("historyLink").onclick = e => {
 };
 $("historyClose").onclick = () => { $("historyPanel").hidden = true; };
 $("historyClear").onclick = async () => {
-  if (!confirm("Effacer tout l'historique ? (les fichiers téléchargés ne sont pas supprimés)")) return;
+  if (!confirm(T("Effacer tout l'historique ? (les fichiers téléchargés ne sont pas supprimés)"))) return;
   await api.historyClear(); refreshHistory();
 };
 api.onHistoryChanged(() => { if (!$("historyPanel").hidden) refreshHistory(); });
@@ -814,31 +985,31 @@ $("notesUpdate").onclick = () => { hideNotes(); $("updBtn").click(); };
 api.onAppUpdate(s => {
   const banner = $("updBanner"), btn = $("updBtn"), notesBtn = $("updNotesBtn");
   if (s.state === "available") {
-    $("updText").textContent = `🎉 VideoCutter ${s.version} est disponible.`;
-    btn.textContent = "Mettre à jour"; btn.disabled = false; btn.hidden = false;
-    btn.onclick = () => { btn.disabled = true; notesBtn.hidden = true; $("updText").textContent = "Téléchargement de la mise à jour…"; api.appUpdateDownload(); };
+    $("updText").textContent = T(`🎉 VideoCutter ${s.version} est disponible.`);
+    btn.textContent = T("Mettre à jour"); btn.disabled = false; btn.hidden = false;
+    btn.onclick = () => { btn.disabled = true; notesBtn.hidden = true; $("updText").textContent = T("Téléchargement de la mise à jour…"); api.appUpdateDownload(); };
     const notes = typeof s.notes === "string" ? s.notes.trim() : "";
     notesBtn.hidden = !notes;
     notesBtn.onclick = () => {
-      $("notesTitle").textContent = `Quoi de neuf dans la ${s.version} ?`;
+      $("notesTitle").textContent = T(`Quoi de neuf dans la ${s.version} ?`);
       $("notesText").textContent = notes;
       $("notesUpdate").hidden = btn.disabled;
       $("notesModal").hidden = false; $("notesClose").focus();
     };
     banner.hidden = false;
   } else if (s.state === "downloading") {
-    $("updText").textContent = `Téléchargement de la mise à jour… ${s.percent} %`;
+    $("updText").textContent = T("Téléchargement de la mise à jour…") + ` ${s.percent} %`;
     btn.hidden = true; notesBtn.hidden = true; banner.hidden = false;
   } else if (s.state === "ready") {
-    $("updText").textContent = `✓ VideoCutter ${s.version} est prêt à être installé.`;
-    btn.textContent = "Redémarrer et installer"; btn.disabled = false; btn.hidden = false;
+    $("updText").textContent = T(`✓ VideoCutter ${s.version} est prêt à être installé.`);
+    btn.textContent = T("Redémarrer et installer"); btn.disabled = false; btn.hidden = false;
     btn.onclick = () => {
-      if (currentJob && !confirm("Un téléchargement est en cours : il sera annulé. Continuer ?")) return;
+      if (currentJob && !confirm(T("Un téléchargement est en cours : il sera annulé. Continuer ?"))) return;
       api.appUpdateInstall();
     };
     banner.hidden = false;
   } else if (s.state === "error" && !banner.hidden) {
-    $("updText").textContent = "La mise à jour n'a pas pu être téléchargée. Elle sera proposée à nouveau au prochain lancement.";
+    $("updText").textContent = T("La mise à jour n'a pas pu être téléchargée. Elle sera proposée à nouveau au prochain lancement.");
     btn.hidden = true;
   }
 });
@@ -858,12 +1029,12 @@ function renderQueue() {
     const text = document.createElement("div");
     const title = document.createElement("div"); title.className = "h-title"; title.textContent = q.title;
     const meta = document.createElement("div"); meta.className = "h-meta";
-    meta.textContent = [Q_STATUS[q.status] + (q.status === "running" && q.percent != null ? ` ${Math.round(q.percent)} %` : ""), q.detail, q.msg].filter(Boolean).join(" · ");
+    meta.textContent = [T(Q_STATUS[q.status]) + (q.status === "running" && q.percent != null ? ` ${Math.round(q.percent)} %` : ""), q.detail, T(q.msg || "")].filter(Boolean).join(" · ");
     text.append(title, meta);
     const actions = document.createElement("div"); actions.className = "h-actions";
     if (q.status === "waiting" || q.status === "running") {
       const x = document.createElement("button"); x.type = "button"; x.className = "small"; x.textContent = "✕";
-      x.title = q.status === "running" ? "Annuler ce téléchargement" : "Retirer de la file";
+      x.title = T(q.status === "running" ? "Annuler ce téléchargement" : "Retirer de la file");
       x.onclick = () => { if (q.status === "running") api.cancel(q.jobId); else { queue = queue.filter(o => o !== q); renderQueue(); } };
       actions.append(x);
     }
@@ -874,28 +1045,56 @@ function renderQueue() {
   $("queueStart").disabled = !waiting;
   $("queueStop").hidden = !queueRunning;
 }
-const describe = o => [o.mode === "audio" ? "Musique " + o.format.toUpperCase() : "Vidéo " + o.format.toUpperCase(),
-  o.crop, o.speed !== 1 ? "×" + String(o.speed).replace(".", ",") : "", o.mute ? "sans son" : "", o.sizeMB ? `< ${o.sizeMB} Mo` : ""].filter(Boolean).join(" · ");
+const describe = o => [T(o.mode === "audio" ? "Musique " : "Vidéo ") + o.format.toUpperCase(),
+  o.crop && o.crop + (o.fill === "blur" ? T(" flou") : ""), o.speed !== 1 ? "×" + String(o.speed).replace(".", ",") : "", o.mute ? T("sans son") : "",
+  o.boomerang && T("boomerang"), o.fade && T("fondu"), o.norm && T("volume"), o.text && T("texte"), o.logoPos && T("logo"), o.subsLang && T("sous-titres"),
+  o.sizeMB ? `< ${o.sizeMB}${T(" Mo")}` : ""].filter(Boolean).join(" · ");
 
 // Ajoute l'extrait actuellement réglé (mêmes réglages que le bouton Télécharger)
 $("queueAdd").onclick = () => {
   if (!info) return;
   const opts = { ...currentOpts(), start: info.start, end: info.end, segments: segments.map(s => ({ ...s })), name: $("fileName").value.trim() };
-  const parts = segments.length ? `${segments.length} extrait${segments.length > 1 ? "s" : ""}` : info.duration && (info.start > 0.05 || info.end < info.duration - 0.05) ? `${fmt(info.start)} → ${fmt(info.end)}` : "vidéo entière";
+  const parts = segments.length ? T(`${segments.length} extrait${segments.length > 1 ? "s" : ""}`) : info.duration && (info.start > 0.05 || info.end < info.duration - 0.05) ? `${fmt(info.start)} → ${fmt(info.end)}` : T("vidéo entière");
   queue.push({ id: ++queueSeq, status: "waiting", token: info.token, title: $("fileName").value.trim() || info.title, opts, detail: parts + " · " + describe(opts) });
   renderQueue();
-  const b = $("queueAdd"); b.textContent = "✓ Ajouté"; setTimeout(() => { b.textContent = "➕ File d'attente"; }, 1500);
+  const b = $("queueAdd"); b.textContent = "✓"; setTimeout(() => { b.textContent = "＋"; }, 1500);
 };
 
-// Plusieurs liens collés : chaque vidéo en entier, avec les réglages de format actuels
-$("bulkAdd").onclick = () => {
-  const links = [...new Set($("bulkLinks").value.split(/\s+/).map(s => s.trim()).filter(s => /^https?:\/\/\S+$/i.test(s)))].slice(0, 50);
-  if (!links.length) { $("bulkMsg").textContent = "Aucun lien valide (ils doivent commencer par https://)."; return; }
-  const base = { ...currentOpts(), crop: "", segments: [], merge: false }; // le cadre 9:16 dépend de chaque vidéo : non appliqué ici
-  for (const url of links) queue.push({ id: ++queueSeq, status: "waiting", url, title: url, opts: { ...base }, detail: "vidéo entière · " + describe(base) });
-  $("bulkLinks").value = "";
-  $("bulkMsg").textContent = `${links.length} lien${links.length > 1 ? "s" : ""} ajouté${links.length > 1 ? "s" : ""}.`;
+// Réglages appliqués aux vidéos entières ajoutées par lien : le cadre, les sous-titres et le boomerang dépendent de chaque vidéo
+const wholeVideoOpts = () => ({ ...currentOpts(), crop: "", segments: [], merge: false, subsLang: "", boomerang: false });
+const queueLinks = entries => {
+  const base = wholeVideoOpts();
+  for (const e of entries) queue.push({ id: ++queueSeq, status: "waiting", url: e.url, title: e.title || e.url, opts: { ...base }, detail: T("vidéo entière") + " · " + describe(base) });
   renderQueue();
+};
+const isPlaylistLink = s => /[?&]list=|\/(playlist|sets|album)\b/i.test(s);
+// Playlist : toutes ses vidéos vont dans la file d'attente. Renvoie le nombre ajouté, ou un message d'erreur.
+async function addPlaylistToQueue(url) {
+  const r = await api.playlistEntries(url).catch(() => ({ error: "Erreur inattendue." }));
+  if (r.error) return r.error.split("\n")[0];
+  if (!r.entries?.length) return "Aucune vidéo trouvée dans cette playlist.";
+  queueLinks(r.entries);
+  return r.entries.length;
+}
+function openQueuePanel() { $("queuePanel").hidden = false; renderQueue(); $("queuePanel").scrollIntoView({ behavior: "smooth" }); }
+
+// Plusieurs liens collés : chaque vidéo en entier, avec les réglages de format actuels (une playlist ajoute toutes ses vidéos)
+$("bulkAdd").onclick = async () => {
+  const links = [...new Set($("bulkLinks").value.split(/\s+/).map(s => s.trim()).filter(s => /^https?:\/\/\S+$/i.test(s)))].slice(0, 50);
+  if (!links.length) { $("bulkMsg").textContent = T("Aucun lien valide (ils doivent commencer par https://)."); return; }
+  $("bulkAdd").disabled = true;
+  let added = 0;
+  const errors = [];
+  for (const url of links) {
+    if (isPlaylistLink(url)) {
+      $("bulkMsg").textContent = T("📃 Lecture de la playlist…");
+      const n = await addPlaylistToQueue(url);
+      if (typeof n === "number") added += n; else errors.push(T(n));
+    } else { queueLinks([{ url }]); added++; }
+  }
+  $("bulkAdd").disabled = false;
+  $("bulkLinks").value = "";
+  $("bulkMsg").textContent = T(`${added} lien${added > 1 ? "s" : ""} ajouté${added > 1 ? "s" : ""}.`) + (errors.length ? " " + errors[0] : "");
 };
 
 function queueProgress(p) {
@@ -936,16 +1135,15 @@ async function runQueue() {
     finally { renderQueue(); }
   }
   queueRunning = false;
-  $("queueStop").textContent = "⏸ Arrêter après le téléchargement en cours";
+  $("queueStop").textContent = T("⏸ Arrêter après le téléchargement en cours");
   renderQueue();
 }
 $("queueStart").onclick = runQueue;
-$("queueStop").onclick = () => { queueStopAsked = true; $("queueStop").textContent = "⏸ Arrêt après ce téléchargement…"; };
+$("queueStop").onclick = () => { queueStopAsked = true; $("queueStop").textContent = T("⏸ Arrêt après ce téléchargement…"); };
 $("queueClear").onclick = () => { queue = queue.filter(q => q.status === "running"); renderQueue(); };
 $("queueLink").onclick = e => {
   e.preventDefault();
-  $("queuePanel").hidden = !$("queuePanel").hidden;
-  if (!$("queuePanel").hidden) { renderQueue(); $("queuePanel").scrollIntoView({ behavior: "smooth" }); }
+  if ($("queuePanel").hidden) openQueuePanel(); else $("queuePanel").hidden = true;
 };
 $("queueClose").onclick = () => { $("queuePanel").hidden = true; };
 renderQueue();

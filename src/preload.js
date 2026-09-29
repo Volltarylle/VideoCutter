@@ -2,20 +2,32 @@
 // La page n'a accès à rien d'autre que ces quelques fonctions.
 const { contextBridge, ipcRenderer } = require("electron");
 
+const str = (v, max = 300) => String(v ?? "").slice(0, max);
+
 contextBridge.exposeInMainWorld("videoCutter", {
+  lang: ipcRenderer.sendSync("get-lang") === "en" ? "en" : "fr",
+  setLang: lang => ipcRenderer.invoke("set-lang", str(lang, 5)),
   info: url => ipcRenderer.invoke("info", String(url)),
   download: opts => ipcRenderer.invoke("download", {
     token: String(opts.token), start: Number(opts.start), end: Number(opts.end),
-    mode: String(opts.mode), format: String(opts.format), quality: String(opts.quality),
-    segments: Array.isArray(opts.segments) ? opts.segments.slice(0, 20).map(s => ({ start: Number(s.start), end: Number(s.end) })) : [],
-    merge: !!opts.merge, crop: String(opts.crop || ""), cropPos: Number(opts.cropPos),
-    name: String(opts.name || "").slice(0, 300), speed: Number(opts.speed), mute: !!opts.mute, sizeMB: Number(opts.sizeMB),
+    mode: String(opts.mode), format: String(opts.format), quality: String(opts.quality), aQuality: str(opts.aQuality, 5),
+    segments: Array.isArray(opts.segments) ? opts.segments.slice(0, 20).map(s => ({ start: Number(s.start), end: Number(s.end), name: str(s.name, 150) })) : [],
+    merge: !!opts.merge, crop: String(opts.crop || ""), cropPos: Number(opts.cropPos), fill: str(opts.fill, 5),
+    name: str(opts.name), speed: Number(opts.speed), mute: !!opts.mute, sizeMB: Number(opts.sizeMB),
+    fade: !!opts.fade, norm: !!opts.norm, boomerang: !!opts.boomerang,
+    text: str(opts.text, 200), textPos: str(opts.textPos, 10), logoPos: str(opts.logoPos, 5),
+    subsLang: str(opts.subsLang, 20), subsMode: str(opts.subsMode, 5),
   }),
   savePrefs: p => ipcRenderer.invoke("save-prefs", {
-    mode: String(p.mode), vFormat: String(p.vFormat), aFormat: String(p.aFormat), crop: String(p.crop),
+    mode: String(p.mode), vFormat: String(p.vFormat), aFormat: String(p.aFormat), crop: String(p.crop), fill: str(p.fill, 5),
     speed: Number(p.speed), sizeMB: Number(p.sizeMB), merge: !!p.merge, mute: !!p.mute, cleanNames: !!p.cleanNames,
+    aQuality: str(p.aQuality, 5), fade: !!p.fade, norm: !!p.norm, logoPos: str(p.logoPos, 5), textPos: str(p.textPos, 10), subsMode: str(p.subsMode, 5),
   }),
   frameAt: (token, t) => ipcRenderer.invoke("frame-at", String(token), Number(t)),
+  snapshot: o => ipcRenderer.invoke("snapshot", { token: String(o.token), t: Number(o.t), crop: str(o.crop, 5), cropPos: Number(o.cropPos), fill: str(o.fill, 5), name: str(o.name) }),
+  saveThumb: o => ipcRenderer.invoke("save-thumb", { token: String(o.token), name: str(o.name) }),
+  playlistEntries: url => ipcRenderer.invoke("playlist-entries", str(url, 2048)),
+  chooseLogo: () => ipcRenderer.invoke("choose-logo"),
   openFile: id => ipcRenderer.invoke("open-file", String(id)),
   startDrag: (id, index) => ipcRenderer.send("start-drag", String(id), Number(index)),
   clipboardLink: () => ipcRenderer.invoke("clipboard-link"),
