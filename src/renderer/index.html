@@ -139,7 +139,7 @@
         <li>L'appli n'a <b>aucun serveur</b> : rien n'est envoyé ni stocké ailleurs que sur ton PC.</li>
         <li>Tes connexions sont enregistrées <b>uniquement sur ce PC</b>, chiffrées par Windows.</li>
         <li>Tes <b>mots de passe</b> sont tapés directement sur la page officielle du site ; l'appli ne les enregistre pas.</li>
-        <li>L'appli ne communique qu'avec le site de la vidéo, et avec GitHub pour vérifier ses mises à jour.</li>
+        <li>L'appli ne communique qu'avec le site de la vidéo, et avec GitHub pour vérifier ses mises à jour (plus SponsorBlock si tu coches « Couper les pubs intégrées », sans lui dire quelle vidéo tu regardes).</li>
         <li>Aucune statistique, aucune publicité, aucun pistage.</li>
       </ul>
     </div>
@@ -283,6 +283,16 @@
           <option value="192">192 kbit/s</option>
           <option value="128">128 kbit/s (plus léger)</option>
         </select>
+        <select id="presetSel" class="preset-sel" aria-label="Favoris" title="Réglages favoris : appliquer une combinaison enregistrée"></select>
+      </div>
+      <div class="preset-box" id="presetBox" hidden>
+        <div class="row">
+          <input type="text" id="presetName" maxlength="30" spellcheck="false" placeholder="Nom du favori (ex. TikTok, Podcast…)">
+          <button type="button" id="presetSave" class="small primary">Enregistrer les réglages actuels</button>
+          <button type="button" id="presetClose" class="small">Fermer</button>
+        </div>
+        <p class="note small">Un favori retient le format, la qualité et toutes les options (cadrage, vitesse, effets, texte, logo…).</p>
+        <ul class="preset-list" id="presetList"></ul>
       </div>
       <p class="note small mt" id="gifNote" hidden>GIF : sans son, 480 px maximum, 12 images/s. Idéal pour moins de 15 secondes.</p>
 
@@ -330,6 +340,11 @@
             <span class="opt-label">Son</span>
             <label class="check-inline" id="muteRow"><input type="checkbox" id="mute"> Retirer le son</label>
             <label class="check-inline" id="normRow" title="Met le volume au même niveau que les vidéos des réseaux sociaux"><input type="checkbox" id="norm"> Volume harmonisé</label>
+          </div>
+          <div class="opt" id="cutRow">
+            <span class="opt-label">Couper</span>
+            <label class="check-inline" id="silenceRow" title="Retire automatiquement les silences de plus de 0,7 seconde (podcasts, tutos, interviews…)"><input type="checkbox" id="cutSilence"> Les blancs</label>
+            <label class="check-inline" id="sponsorRow" title="Retire les passages sponsorisés, l'autopromo et les « abonne-toi » signalés par la communauté SponsorBlock (YouTube)"><input type="checkbox" id="sponsor"> Les pubs intégrées</label>
           </div>
           <div class="opt">
             <span class="opt-label">Effets</span>

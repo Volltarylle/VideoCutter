@@ -3,6 +3,12 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 const str = (v, max = 300) => String(v ?? "").slice(0, max);
+const prefsObj = p => ({
+  mode: str(p.mode, 5), vFormat: str(p.vFormat, 5), aFormat: str(p.aFormat, 5), crop: str(p.crop, 5), fill: str(p.fill, 5),
+  speed: Number(p.speed), sizeMB: Number(p.sizeMB), merge: !!p.merge, mute: !!p.mute, cleanNames: !!p.cleanNames,
+  aQuality: str(p.aQuality, 5), fade: !!p.fade, norm: !!p.norm, logoPos: str(p.logoPos, 5), textPos: str(p.textPos, 10), subsMode: str(p.subsMode, 5),
+  cutSilence: !!p.cutSilence, sponsor: !!p.sponsor,
+});
 
 contextBridge.exposeInMainWorld("videoCutter", {
   lang: ipcRenderer.sendSync("get-lang") === "en" ? "en" : "fr",
@@ -16,13 +22,13 @@ contextBridge.exposeInMainWorld("videoCutter", {
     name: str(opts.name), speed: Number(opts.speed), mute: !!opts.mute, sizeMB: Number(opts.sizeMB),
     fade: !!opts.fade, norm: !!opts.norm, boomerang: !!opts.boomerang,
     text: str(opts.text, 200), textPos: str(opts.textPos, 10), logoPos: str(opts.logoPos, 5),
-    subsLang: str(opts.subsLang, 20), subsMode: str(opts.subsMode, 5),
+    subsLang: str(opts.subsLang, 20), subsMode: str(opts.subsMode, 5), cutSilence: !!opts.cutSilence, sponsor: !!opts.sponsor,
   }),
-  savePrefs: p => ipcRenderer.invoke("save-prefs", {
-    mode: String(p.mode), vFormat: String(p.vFormat), aFormat: String(p.aFormat), crop: String(p.crop), fill: str(p.fill, 5),
-    speed: Number(p.speed), sizeMB: Number(p.sizeMB), merge: !!p.merge, mute: !!p.mute, cleanNames: !!p.cleanNames,
-    aQuality: str(p.aQuality, 5), fade: !!p.fade, norm: !!p.norm, logoPos: str(p.logoPos, 5), textPos: str(p.textPos, 10), subsMode: str(p.subsMode, 5),
-  }),
+  savePrefs: p => ipcRenderer.invoke("save-prefs", prefsObj(p)),
+  // Favoris : liste complète renvoyée (20 maximum), vérifiée par le moteur
+  savePresets: list => ipcRenderer.invoke("save-presets", (Array.isArray(list) ? list : []).slice(0, 20).map(p => ({
+    name: str(p?.name, 30), opts: { ...prefsObj(p?.opts || {}), boomerang: !!p?.opts?.boomerang, text: str(p?.opts?.text, 80) },
+  }))),
   frameAt: (token, t) => ipcRenderer.invoke("frame-at", String(token), Number(t)),
   snapshot: o => ipcRenderer.invoke("snapshot", { token: String(o.token), t: Number(o.t), crop: str(o.crop, 5), cropPos: Number(o.cropPos), fill: str(o.fill, 5), name: str(o.name) }),
   saveThumb: o => ipcRenderer.invoke("save-thumb", { token: String(o.token), name: str(o.name) }),

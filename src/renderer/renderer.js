@@ -302,6 +302,9 @@ function updateFormatUI() {
   $("boomRow").hidden = !video;
   $("textRow").hidden = $("logoRow").hidden = !video;
   $("subsRow").hidden = !video || !info?.subs?.length || !info.duration;
+  $("silenceRow").hidden = gif;                     // un GIF n'a pas de son
+  $("sponsorRow").hidden = !info?.youtubeId;        // SponsorBlock ne connaît que YouTube
+  $("cutRow").hidden = $("silenceRow").hidden && $("sponsorRow").hidden;
   $("gifNote").hidden = !gif;
   updateCropUI();
   updateOptSummary();
@@ -313,6 +316,7 @@ function updateOptSummary() {
     video && crop && crop + (fill === "blur" ? T(" flou") : ""), sp !== 1 && "×" + String(sp).replace(".", ","),
     video && !gif && $("mute").checked && T("sans son"),
     !gif && !(video && $("mute").checked) && $("norm").checked && T("volume"),
+    !gif && $("cutSilence").checked && T("sans blancs"), info?.youtubeId && $("sponsor").checked && T("sans pubs"),
     $("fade").checked && T("fondu"), video && $("boomerang").checked && T("boomerang"),
     video && $("overlayText").value.trim() && T("texte"), video && $("logoPos").value && T("logo"),
     video && !$("subsRow").hidden && $("subsLang").value && T("sous-titres"),
@@ -328,7 +332,7 @@ $("modeSeg").addEventListener("click", e => {
   updateEstimate();
   savePrefs();
 });
-for (const id of ["vFormat", "aFormat", "speed", "sizeMB", "mute", "norm", "fade", "boomerang", "textPos", "subsLang", "subsMode"]) $(id).addEventListener("change", updateFormatUI);
+for (const id of ["vFormat", "aFormat", "speed", "sizeMB", "mute", "norm", "fade", "boomerang", "textPos", "subsLang", "subsMode", "cutSilence", "sponsor"]) $(id).addEventListener("change", updateFormatUI);
 $("overlayText").addEventListener("input", updateOptSummary);
 
 // Cadrage : rogner (cadre à déplacer) ou garder toute l'image sur un fond flou
@@ -599,7 +603,7 @@ function updateEstimate() {
   if (target) bytes = Math.min(bytes, target * files);
   out.textContent = "≈ " + humanSize(bytes) + (files > 1 ? T(` au total (${files} fichiers)`) : "") + (target ? T(` · maxi ${$("sizeMB").value} Mo par fichier`) : "");
 }
-for (const id of ["quality", "aQuality", "vFormat", "aFormat", "speed", "sizeMB", "mute", "norm", "fade", "boomerang", "textPos", "logoPos", "subsMode"]) $(id).addEventListener("change", () => { updateEstimate(); savePrefs(); });
+for (const id of ["quality", "aQuality", "vFormat", "aFormat", "speed", "sizeMB", "mute", "norm", "fade", "boomerang", "textPos", "logoPos", "subsMode", "cutSilence", "sponsor"]) $(id).addEventListener("change", () => { updateEstimate(); savePrefs(); });
 for (const r of document.querySelectorAll("input[name=merge]")) r.addEventListener("change", () => { updateEstimate(); updateDlLabel(); savePrefs(); });
 
 // ---------------------------------------------------------------------------
@@ -614,6 +618,7 @@ function savePrefs() {
     sizeMB: Number($("sizeMB").value), merge: document.querySelector("input[name=merge]:checked")?.value === "1",
     mute: $("mute").checked, cleanNames: $("cleanNames").checked, aQuality: $("aQuality").value,
     fade: $("fade").checked, norm: $("norm").checked, logoPos: $("logoPos").value, textPos: $("textPos").value, subsMode: $("subsMode").value,
+    cutSilence: $("cutSilence").checked, sponsor: $("sponsor").checked,
   }), 300);
 }
 function applyPrefs(p) {
@@ -622,7 +627,8 @@ function applyPrefs(p) {
   if (p.aQuality) $("aQuality").value = p.aQuality;
   if (p.speed) $("speed").value = String(p.speed);
   if (p.sizeMB !== undefined) $("sizeMB").value = String(p.sizeMB);
-  for (const k of ["mute", "cleanNames", "fade", "norm"]) if (typeof p[k] === "boolean") $(k).checked = p[k];
+  for (const k of ["mute", "cleanNames", "fade", "norm", "cutSilence", "sponsor", "boomerang"]) if (typeof p[k] === "boolean") $(k).checked = p[k];
+  if (typeof p.text === "string") $("overlayText").value = p.text; // favoris uniquement
   for (const k of ["textPos", "subsMode"]) if (p[k]) $(k).value = p[k];
   if (p.logoPos && $("logoName").textContent) $("logoPos").value = p.logoPos; // seulement si un logo a déjà été choisi
   if (typeof p.merge === "boolean") setMerge(p.merge);
@@ -646,6 +652,7 @@ function currentOpts() {
     text: mode === "video" ? $("overlayText").value.trim() : "", textPos: $("textPos").value,
     logoPos: mode === "video" ? $("logoPos").value : "",
     subsLang: mode === "video" && !$("subsRow").hidden ? $("subsLang").value : "", subsMode: $("subsMode").value,
+    cutSilence: !isGif() && $("cutSilence").checked, sponsor: !!info?.youtubeId && $("sponsor").checked,
   };
 }
 
@@ -765,7 +772,7 @@ async function refreshSettings() {
   $("ytVer").textContent = s.ytdlp || "?";
   $("appVer").textContent = s.version ? "v" + s.version : "";
   showLogoName(s.logo);
-  if (!prefsReady) applyPrefs(s.prefs || {});
+  if (!prefsReady) { presets = s.presets || []; renderPresets(); applyPrefs(s.prefs || {}); }
 }
 $("folderLink").onclick = e => { e.preventDefault(); api.openFolder(); };
 $("changeFolder").onclick = async e => { e.preventDefault(); $("folderLink").textContent = await api.chooseFolder(); };
@@ -1047,7 +1054,7 @@ function renderQueue() {
 }
 const describe = o => [T(o.mode === "audio" ? "Musique " : "Vidéo ") + o.format.toUpperCase(),
   o.crop && o.crop + (o.fill === "blur" ? T(" flou") : ""), o.speed !== 1 ? "×" + String(o.speed).replace(".", ",") : "", o.mute ? T("sans son") : "",
-  o.boomerang && T("boomerang"), o.fade && T("fondu"), o.norm && T("volume"), o.text && T("texte"), o.logoPos && T("logo"), o.subsLang && T("sous-titres"),
+  o.cutSilence && T("sans blancs"), o.sponsor && T("sans pubs"), o.boomerang && T("boomerang"), o.fade && T("fondu"), o.norm && T("volume"), o.text && T("texte"), o.logoPos && T("logo"), o.subsLang && T("sous-titres"),
   o.sizeMB ? `< ${o.sizeMB}${T(" Mo")}` : ""].filter(Boolean).join(" · ");
 
 // Ajoute l'extrait actuellement réglé (mêmes réglages que le bouton Télécharger)
@@ -1061,7 +1068,7 @@ $("queueAdd").onclick = () => {
 };
 
 // Réglages appliqués aux vidéos entières ajoutées par lien : le cadre, les sous-titres et le boomerang dépendent de chaque vidéo
-const wholeVideoOpts = () => ({ ...currentOpts(), crop: "", segments: [], merge: false, subsLang: "", boomerang: false });
+const wholeVideoOpts = () => ({ ...currentOpts(), crop: "", segments: [], merge: false, subsLang: "", boomerang: false, sponsor: $("sponsor").checked });
 const queueLinks = entries => {
   const base = wholeVideoOpts();
   for (const e of entries) queue.push({ id: ++queueSeq, status: "waiting", url: e.url, title: e.title || e.url, opts: { ...base }, detail: T("vidéo entière") + " · " + describe(base) });
@@ -1147,6 +1154,67 @@ $("queueLink").onclick = e => {
 };
 $("queueClose").onclick = () => { $("queuePanel").hidden = true; };
 renderQueue();
+
+// ---------------------------------------------------------------------------
+// Favoris : combinaisons de réglages enregistrées sous un nom (« TikTok », « Podcast »…)
+// ---------------------------------------------------------------------------
+let presets = [];
+// Réglages actuels, sous la même forme que les choix mémorisés (+ texte et boomerang)
+function presetSnapshot() {
+  return {
+    mode, vFormat: $("vFormat").value, aFormat: $("aFormat").value, aQuality: $("aQuality").value, crop, fill,
+    speed: Number($("speed").value), sizeMB: Number($("sizeMB").value), mute: $("mute").checked, norm: $("norm").checked,
+    fade: $("fade").checked, boomerang: $("boomerang").checked, text: $("overlayText").value.trim(), textPos: $("textPos").value,
+    logoPos: $("logoPos").value, subsMode: $("subsMode").value, cutSilence: $("cutSilence").checked, sponsor: $("sponsor").checked,
+  };
+}
+function renderPresets() {
+  const sel = $("presetSel");
+  sel.replaceChildren(new Option(T("★ Favoris"), ""), ...presets.map((p, i) => new Option(p.name, String(i))), new Option(T("⚙ Gérer les favoris…"), "manage"));
+  sel.value = "";
+  $("presetList").replaceChildren(...presets.map((p, i) => {
+    const li = document.createElement("li");
+    const name = document.createElement("span"); name.textContent = p.name;
+    const actions = document.createElement("span"); actions.className = "row";
+    const upd = document.createElement("button"); upd.type = "button"; upd.className = "small"; upd.textContent = T("Remplacer");
+    upd.title = T("Remplacer par les réglages actuels");
+    upd.onclick = () => { presets[i] = { name: p.name, opts: presetSnapshot() }; storePresets(); };
+    const del = document.createElement("button"); del.type = "button"; del.className = "small"; del.textContent = "✕";
+    del.title = T("Supprimer ce favori");
+    del.onclick = () => { presets.splice(i, 1); storePresets(); };
+    actions.append(upd, del);
+    li.append(name, actions);
+    return li;
+  }));
+  if (!presets.length) { const li = document.createElement("li"); li.className = "empty"; li.textContent = T("Aucun favori pour l'instant."); $("presetList").append(li); }
+}
+async function storePresets() {
+  presets = await api.savePresets(presets).catch(() => presets);
+  renderPresets();
+}
+$("presetSel").addEventListener("change", () => {
+  const v = $("presetSel").value;
+  $("presetSel").value = "";
+  if (v === "manage") { $("presetBox").hidden = false; $("presetName").focus(); return; }
+  const p = presets[Number(v)];
+  if (!p) return;
+  if (!("boomerang" in p.opts)) p.opts.boomerang = false;
+  if (!("text" in p.opts)) p.opts.text = "";
+  applyPrefs(p.opts);
+  updateEstimate(); updateOptSummary(); savePrefs();
+  const sel = $("presetSel"); sel.options[0].text = "✓ " + p.name; setTimeout(() => { sel.options[0].text = T("★ Favoris"); }, 2000);
+});
+$("presetSave").onclick = () => {
+  const name = $("presetName").value.replace(/s+/g, " ").trim().slice(0, 30);
+  if (!name) { $("presetName").focus(); return; }
+  const i = presets.findIndex(p => p.name.toLowerCase() === name.toLowerCase());
+  const entry = { name, opts: presetSnapshot() };
+  if (i >= 0) presets[i] = entry; else if (presets.length < 20) presets.push(entry); else return;
+  $("presetName").value = "";
+  storePresets();
+};
+$("presetName").addEventListener("keydown", e => { if (e.key === "Enter") $("presetSave").click(); });
+$("presetClose").onclick = () => { $("presetBox").hidden = true; };
 
 // Après la fermeture d'une fenêtre de connexion : mise à jour de la liste, et nouvel essai du lien en échec
 api.onLoginChanged(() => {

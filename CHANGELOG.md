@@ -32,6 +32,9 @@
 - **Texte** incrusté en haut ou en bas de la vidéo.
 - **Logo** incrusté dans un coin (image choisie une fois, gardée pour les fois suivantes).
 - **Sous-titres** du site : en fichier `.srt` à part ou incrustés dans l'image, recalés sur l'extrait (début, vitesse, extraits recollés).
+- **Couper les blancs** : les silences de plus de 0,7 s sont retirés automatiquement (podcasts, tutos, interviews).
+- **Couper les pubs intégrées** (YouTube) : passages sponsorisés, autopromo et « abonne-toi » retirés grâce à la base collaborative SponsorBlock. Option désactivée par défaut ; le service ne reçoit qu'un début d'empreinte, pas l'identifiant de la vidéo.
+- **Favoris** : enregistrer une combinaison de réglages sous un nom (« TikTok », « Podcast »…) et la rappeler en un clic.
 - **Version anglaise** de l'appli (automatique selon la langue de Windows, ou via le menu « ⋯ »).
 
 ### Améliorations

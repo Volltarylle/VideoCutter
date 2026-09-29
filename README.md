@@ -21,7 +21,7 @@
 **Qualité** — « Auto » prend la meilleure qualité disponible ; le menu ne propose que les qualités qui existent pour la vidéo.
 
 **Découpe** — aperçu, miniatures du début et de la fin, zoom sur la barre de découpe, chapitres, liens avec un temps (`?t=`), plusieurs extraits d'un coup (fichiers séparés ou recollés), « enlever ce passage », raccourcis clavier (`I`, `O`, `Espace`, flèches…).
-**Export** — cadrage 9:16, 1:1 ou 4:5 (rogné ou sur fond flou), vitesse (×0,5 à ×2), fondu, volume harmonisé, boomerang, texte et logo incrustés, sous-titres (fichier `.srt` ou incrustés), vidéo sans le son, qualité audio au choix, taille maximale (10, 25 ou 50 Mo), taille estimée avant le téléchargement, nom de fichier modifiable et nettoyé (emojis, #, @).
+**Export** — favoris (combinaisons de réglages en un clic), couper automatiquement les blancs et les pubs intégrées (YouTube), cadrage 9:16, 1:1 ou 4:5 (rogné ou sur fond flou), vitesse (×0,5 à ×2), fondu, volume harmonisé, boomerang, texte et logo incrustés, sous-titres (fichier `.srt` ou incrustés), vidéo sans le son, qualité audio au choix, taille maximale (10, 25 ou 50 Mo), taille estimée avant le téléchargement, nom de fichier modifiable et nettoyé (emojis, #, @).
 **Images** — capture PNG de l'image affichée, miniature de la vidéo.
 **Confort** — file d'attente (et playlists entières), historique, lien du presse-papiers proposé automatiquement, glisser-déposer d'un lien, glisser le fichier terminé directement dans un autre logiciel, choix mémorisés, notification et progression dans la barre des tâches, mise à jour automatique avec « Quoi de neuf ? », connexion aux sites pour les vidéos réservées aux membres, interface en français ou en anglais.
 
@@ -36,6 +36,7 @@
 
 - **Aucun serveur** : VideoCutter n'envoie rien à personne. Pas de compte, pas de statistiques, pas de publicité, pas de pistage.
 - L'appli ne communique qu'avec **le site de la vidéo** que tu télécharges, et avec **GitHub** pour vérifier ses mises à jour (celles de l'appli et de yt-dlp). Une mise à jour n'est téléchargée qu'après ton accord.
+- Seule exception, si tu coches « Couper les pubs intégrées » : l'appli interroge **SponsorBlock** en n'envoyant que les 4 premiers caractères d'une empreinte de l'identifiant de la vidéo. Le service ne peut donc pas savoir quelle vidéo tu télécharges.
 - Le presse-papiers n'est lu que lorsque la fenêtre de l'appli reprend la main, et seulement pour y repérer un lien web ; rien d'autre n'en est lu ni conservé.
 - L'historique des téléchargements est enregistré uniquement sur ton PC et peut être effacé à tout moment.
 - **Connexions aux sites** : elles se font dans une fenêtre de l'appli séparée de ton navigateur. Elles restent **sur ton PC**, chiffrées par Windows, et ne sont utilisées que si un site l'exige. Tes mots de passe sont tapés sur la page officielle du site ; l'appli ne les enregistre pas.

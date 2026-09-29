@@ -126,7 +126,24 @@ function sanitizePrefs(p) {
   if (["", "tl", "tr", "bl", "br"].includes(p.logoPos)) out.logoPos = p.logoPos;
   if (p.textPos === "top" || p.textPos === "bottom") out.textPos = p.textPos;
   if (p.subsMode === "file" || p.subsMode === "burn") out.subsMode = p.subsMode;
-  for (const k of ["merge", "mute", "cleanNames", "fade", "norm"]) if (typeof p[k] === "boolean") out[k] = p[k];
+  for (const k of ["merge", "mute", "cleanNames", "fade", "norm", "cutSilence", "sponsor"]) if (typeof p[k] === "boolean") out[k] = p[k];
+  return out;
+}
+
+// Favoris : combinaisons de réglages nommées (« TikTok », « Podcast »…), 20 maximum.
+// Ils peuvent aussi garder le texte incrusté et le boomerang, qui ne font pas partie des choix mémorisés.
+function sanitizePresets(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const p of list.slice(0, 20)) {
+    const name = String(p?.name ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 30);
+    if (!name || out.some(o => o.name.toLowerCase() === name.toLowerCase())) continue;
+    const opts = sanitizePrefs(p.opts);
+    delete opts.merge; delete opts.cleanNames;
+    if (typeof p.opts?.boomerang === "boolean") opts.boomerang = p.opts.boomerang;
+    if (typeof p.opts?.text === "string") opts.text = p.opts.text.replace(/[\u0000-\u001f\u007f]+/g, " ").slice(0, 80);
+    out.push({ name, opts });
+  }
   return out;
 }
 
@@ -138,6 +155,7 @@ function loadSettings() {
     if (Number.isFinite(saved.lastUpdateCheck)) s.lastUpdateCheck = saved.lastUpdateCheck;
     if (saved.terms && typeof saved.terms.version === "string") s.terms = { version: saved.terms.version, acceptedAt: String(saved.terms.acceptedAt || "") };
     s.prefs = sanitizePrefs(saved.prefs);
+    s.presets = sanitizePresets(saved.presets);
     if (saved.lang === "fr" || saved.lang === "en") s.lang = saved.lang;
     if (typeof saved.logo === "string" && /^logo\.(png|jpg|jpeg|webp)$/.test(saved.logo)) s.logo = saved.logo;
     if (typeof saved.logoName === "string") s.logoName = saved.logoName.slice(0, 120);
@@ -556,6 +574,7 @@ async function getInfo(url) {
     thumb: httpUrl(j.thumbnail) ? { url: httpUrl(j.thumbnail), headers: {} } : null,
     frameSrc: hasVideo && duration ? pickFrameSource(formats) : null,
     stillSrc: hasVideo ? pickStillSource(formats) : null,
+    ytId: isYouTube ? j.id : null,
     subs: hasVideo && duration ? subtitleLangs(j) : [],
   };
   infos.set(token, entry);
@@ -780,7 +799,69 @@ function audioCodecArgs(ext, kbps) {
 const FFMPEG = () => path.join(FFMPEG_DIR, "ffmpeg.exe");
 
 const AUDIO_EXTS = new Set([".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"]);
-const needsPost = p => !!(p.gif || p.crop || p.speed !== 1 || p.mute || p.sizeMB || p.fade || p.norm || p.boomerang || p.text || p.logo || p.burnSubs);
+const needsPost = p => !!(p.gif || p.crop || p.speed !== 1 || p.mute || p.sizeMB || p.fade || p.norm || p.boomerang || p.text || p.logo || p.burnSubs || p.keep);
+
+// ---------------------------------------------------------------------------
+// Passages retirés automatiquement : blancs (silences) et pubs intégrées (SponsorBlock).
+// Tout est calculé en « temps du fichier » ; la finition ne garde que les morceaux listés dans keep.
+// ---------------------------------------------------------------------------
+const SILENCE_PAD = 0.15; // on garde un peu de silence de chaque côté : la coupe reste naturelle
+
+// Blancs de plus de 0,7 s sous −35 dB, repérés par FFmpeg
+async function detectSilences(job, file) {
+  const found = [];
+  let start = null;
+  await runTool(job, FFMPEG(), ["-hide_banner", "-nostdin", "-i", file, "-vn", "-af", "silencedetect=noise=-35dB:d=0.7", "-f", "null", "-"], path.dirname(file), line => {
+    let m;
+    if ((m = line.match(/silence_start: (-?[\d.]+)/))) start = Math.max(0, +m[1]);
+    else if ((m = line.match(/silence_end: ([\d.]+)/)) && start !== null) { found.push([start, +m[1]]); start = null; }
+  });
+  if (start !== null) found.push([start, Infinity]);
+  return found.map(([s, e]) => [s === 0 ? 0 : s + SILENCE_PAD, e - SILENCE_PAD]).filter(([s, e]) => e - s >= 0.3);
+}
+
+// Pubs intégrées d'une vidéo YouTube, d'après la base collaborative SponsorBlock.
+// Seuls les 4 premiers caractères de l'empreinte de l'identifiant sont envoyés : le service ne sait pas quelle vidéo est regardée.
+const SB_CATEGORIES = ["sponsor", "selfpromo", "interaction"];
+async function sponsorSegments(videoId) {
+  const prefix = require("crypto").createHash("sha256").update(videoId).digest("hex").slice(0, 4);
+  const url = `https://sponsor.ajay.app/api/skipSegments/${prefix}?categories=${encodeURIComponent(JSON.stringify(SB_CATEGORIES))}&actionTypes=${encodeURIComponent('["skip"]')}`;
+  const r = await Promise.race([net.fetch(url, { headers: { "User-Agent": "videocutter", Accept: "application/json" } }),
+    new Promise((_, rej) => setTimeout(() => rej(new Error("délai dépassé")), 12000))]);
+  if (r.status === 404) return []; // aucune pub connue
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const list = JSON.parse((await r.text()).slice(0, 2e6));
+  const v = Array.isArray(list) ? list.find(x => x?.videoID === videoId) : null;
+  return (v?.segments || []).map(s => [Number(s?.segment?.[0]), Number(s?.segment?.[1])]).filter(([s, e]) => s >= 0 && e > s).slice(0, 100);
+}
+
+// Passages de la vidéo d'origine → temps dans un fichier formé des extraits « parts » mis bout à bout
+function toFileTime(ranges, parts) {
+  const out = [];
+  let offset = 0;
+  for (const part of parts) {
+    for (const [s, e] of ranges) {
+      const a = Math.max(s, part.start), b = Math.min(e, part.end);
+      if (b > a) out.push([a - part.start + offset, b - part.start + offset]);
+    }
+    offset += part.end - part.start;
+  }
+  return out;
+}
+
+// Morceaux gardés = tout sauf les passages retirés. null s'il n'y a rien à retirer (ou s'il ne resterait presque rien).
+function keepFrom(removed, duration) {
+  const sorted = removed.map(([s, e]) => [Math.max(0, s), Math.min(duration, e)]).filter(([s, e]) => e - s > 0.05).sort((x, y) => x[0] - y[0]);
+  if (!sorted.length) return null;
+  const keep = [];
+  let t = 0;
+  for (const [s, e] of sorted) { if (s - t > 0.05) keep.push([t, s]); t = Math.max(t, e); }
+  if (duration - t > 0.05) keep.push([t, duration]);
+  const total = keep.reduce((a, [s, e]) => a + e - s, 0);
+  return total >= 0.5 && total < duration - 0.05 ? keep.slice(0, 400) : null;
+}
+const keptDuration = keep => keep.reduce((a, [s, e]) => a + e - s, 0);
+const keepExpr = keep => keep.map(([s, e]) => `between(t\\,${s.toFixed(3)}\\,${e.toFixed(3)})`).join("+");
 
 // Filtre de recadrage 9:16 / 1:1 / 4:5 à la position choisie (0 = gauche/haut, 1 = droite/bas)
 const cropFilter = (crop, cropPos) => {
@@ -819,7 +900,7 @@ function probeMedia(file) {
 async function postProcess(job, src, p, m, report) {
   const ext = path.extname(src), audioOnly = AUDIO_EXTS.has(ext), dir = path.dirname(src);
   const speed = p.speed, boomerang = p.boomerang && !audioOnly;
-  const outDur = Math.max(0.1, (m.duration || p.duration) / speed * (boomerang ? 2 : 1));
+  const outDur = Math.max(0.1, (p.keep ? keptDuration(p.keep) : m.duration || p.duration) / speed * (boomerang ? 2 : 1));
   const FADE = Math.min(0.6, outDur / 4).toFixed(2), fadeOutAt = Math.max(0, outDur - FADE).toFixed(2);
   const graph = [];
   let n = 0;
@@ -830,6 +911,7 @@ async function postProcess(job, src, p, m, report) {
   const aStep = f => { const o = label("a"); graph.push(`[${a}]${f}[${o}]`); a = o; aChanged = true; };
   const withAudio = m.audio && !(p.mute && !audioOnly) && !p.gif;
   if (withAudio) {
+    if (p.keep) aStep(`aselect='${keepExpr(p.keep)}',asetpts=N/SR/TB`); // blancs / pubs retirés
     if (speed !== 1) aStep(`atempo=${speed}`);
     if (boomerang) { const x = label("a"), y = label("a"), r = label("a"), o = label("a");
       graph.push(`[${a}]asplit=2[${x}][${y}]`, `[${y}]areverse[${r}]`, `[${x}][${r}]concat=n=2:v=0:a=1[${o}]`); a = o; aChanged = true; }
@@ -850,6 +932,7 @@ async function postProcess(job, src, p, m, report) {
     // --- Image ---
     let v = "0:v", vChanged = false, W = m.width || 1280, H = m.height || 720;
     const vStep = f => { const o = label("v"); graph.push(`[${v}]${f}[${o}]`); v = o; vChanged = true; };
+    if (p.keep) vStep(`select='${keepExpr(p.keep)}',setpts=N/FRAME_RATE/TB`);
     if (p.crop && p.fill === "blur") {
       // Toute l'image, centrée, sur un fond flou qui remplit le format choisi
       const r = CROPS[p.crop];
@@ -994,6 +1077,7 @@ async function startDownload(opts) {
     text, textPos: opts.textPos === "bottom" ? "bottom" : "top",
     logo: logoPos ? logoFile : null, logoPos,
     sub, subsMode: opts.subsMode === "burn" ? "burn" : "file", aQuality,
+    cutSilence: !!opts.cutSilence && !gif, sponsor: !!opts.sponsor && !!info.ytId,
   };
   // Le boomerang garde toute la vidéo en mémoire : limité aux extraits courts
   const longest = merge ? segments.reduce((t, s) => t + s.end - s.start, 0) : Math.max(...segments.map(s => s.end - s.start));
@@ -1024,19 +1108,23 @@ function parseSrt(text) {
     return { s: sec(s), e: sec(e), t: ls.slice(i + 1).join("\n").trim() };
   }).filter(c => c && c.t && c.e > c.s);
 }
-function srtFor(cues, parts, speed) {
-  const ts = x => { const ms = Math.max(0, Math.round(x * 1000)); const p = (v, n = 2) => String(v).padStart(n, "0");
-    return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`; };
+// Sous-titres gardés quand seuls les morceaux « parts » sont conservés et mis bout à bout (extraits, blancs retirés…)
+function cuesFor(cues, parts) {
   const out = [];
   let offset = 0;
   for (const part of parts) {
     for (const c of cues) {
       if (c.e <= part.start || c.s >= part.end) continue;
-      out.push({ s: (Math.max(c.s, part.start) - part.start + offset) / speed, e: (Math.min(c.e, part.end) - part.start + offset) / speed, t: c.t });
+      out.push({ s: Math.max(c.s, part.start) - part.start + offset, e: Math.min(c.e, part.end) - part.start + offset, t: c.t });
     }
     offset += part.end - part.start;
   }
-  return out.length ? out.map((c, i) => `${i + 1}\n${ts(c.s)} --> ${ts(c.e)}\n${c.t}\n`).join("\n") : null;
+  return out;
+}
+function srtText(cues, speed) {
+  const ts = x => { const ms = Math.max(0, Math.round(x * 1000)); const p = (v, n = 2) => String(v).padStart(n, "0");
+    return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`; };
+  return cues.map((c, i) => `${i + 1}\n${ts(c.s / speed)} --> ${ts(c.e / speed)}\n${c.t}\n`).join("\n");
 }
 async function fetchSubs(job, info, sub, cookieFile) {
   const dir = path.join(job.tempDir, "subs");
@@ -1076,7 +1164,7 @@ async function runJob(job, { info, segments, duration, mode, format, quality, me
     boomerang: fx.boomerang, text: fx.text, textPos: fx.textPos, logo: fx.logo, logoPos: fx.logoPos, aQuality: fx.aQuality,
     burnSubs: fx.sub && fx.subsMode === "burn" ? "…" : null }; // remplacé plus bas par le texte réel des sous-titres
   // Répartition de la barre de progression selon les étapes prévues
-  const wCrop = needsPost(post) ? 0.3 : 0, wMerge = merge ? 0.05 : 0, wDl = 1 - wCrop - wMerge;
+  const wCrop = needsPost(post) || fx.cutSilence || fx.sponsor ? 0.3 : 0, wMerge = merge ? 0.05 : 0, wDl = 1 - wCrop - wMerge;
   const setP = (frac, line) => { job.percent = Math.min(99.5, Math.max(0, frac * 100)); if (line) job.line = line; sendProgress(job); };
   const prefix = i => (n > 1 ? `Extrait ${i + 1}/${n} — ` : "");
   let cookieFile = null, cues = null;
@@ -1124,22 +1212,46 @@ async function runJob(job, { info, segments, duration, mode, format, quality, me
     }
     if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
 
-    // Sous-titres de chaque fichier, recalés sur ses extraits
     const partsOf = i => (merge ? segments : [segments[i]]);
-    const srts = results.map((_, i) => (cues ? srtFor(cues, partsOf(i), speed) : null));
-
-    if (needsPost(post)) {
-      const label = [post.gif && "conversion en GIF", crop && (fx.fill === "blur" ? "fond flou " : "recadrage ") + crop, speed !== 1 && "vitesse ×" + String(speed).replace(".", ","),
-        fx.boomerang && "boomerang", post.burnSubs && "sous-titres", (fx.text || fx.logo) && "incrustation", (fx.fade || fx.norm) && "son",
-        mute && "retrait du son", sizeMB && `taille < ${sizeMB} Mo`].filter(Boolean).join(", ");
-      for (let i = 0; i < results.length && job.status === "running"; i++) {
-        const pBase = wDl + wMerge + (i / results.length) * wCrop;
-        setP(pBase, (results.length > 1 ? `Fichier ${i + 1}/${results.length} — ` : "") + "Finition : " + label + "…");
-        const m = await probeMedia(results[i]);
-        const d = m.duration || partsOf(i).reduce((a, s) => a + (s.end - s.start), 0);
-        results[i] = await postProcess(job, results[i], { ...post, duration: d, burnSubs: post.burnSubs && srts[i] }, m, f => setP(pBase + f * wCrop / results.length));
-      }
+    // Pubs intégrées (YouTube) : liste demandée une seule fois pour toute la vidéo
+    let sponsor = null;
+    if (fx.sponsor && info.ytId) {
+      setP(wDl + wMerge, "Recherche des pubs intégrées…");
+      sponsor = await sponsorSegments(info.ytId).catch(() => null);
+      if (!sponsor) job.note = "liste des pubs intégrées indisponible";
     }
+
+    const label = [post.gif && "conversion en GIF", crop && (fx.fill === "blur" ? "fond flou " : "recadrage ") + crop, speed !== 1 && "vitesse ×" + String(speed).replace(".", ","),
+      fx.boomerang && "boomerang", post.burnSubs && "sous-titres", (fx.text || fx.logo) && "incrustation", (fx.fade || fx.norm) && "son",
+      mute && "retrait du son", sizeMB && `taille < ${sizeMB} Mo`].filter(Boolean).join(", ");
+    const srts = [];
+    let removedTotal = 0;
+    for (let i = 0; i < results.length && job.status === "running"; i++) {
+      const pBase = wDl + wMerge + (i / results.length) * wCrop;
+      const fileTag = results.length > 1 ? `Fichier ${i + 1}/${results.length} — ` : "";
+      const m = await probeMedia(results[i]);
+      const d = m.duration || partsOf(i).reduce((a, s) => a + (s.end - s.start), 0);
+      // Passages à retirer de ce fichier : pubs (temps de la vidéo → temps du fichier) et blancs (détectés dans le fichier)
+      const removed = sponsor?.length ? toFileTime(sponsor, partsOf(i)) : [];
+      if (fx.cutSilence && m.audio) {
+        setP(pBase, fileTag + "Recherche des blancs…");
+        removed.push(...await detectSilences(job, results[i]));
+        if (job.status !== "running") break;
+      }
+      const keep = removed.length ? keepFrom(removed, d) : null;
+      if (keep) removedTotal += d - keptDuration(keep);
+      // Sous-titres de ce fichier, recalés sur ses extraits puis sur les morceaux gardés
+      let list = cues ? cuesFor(cues, partsOf(i)) : null;
+      if (list && keep) list = cuesFor(list, keep.map(([s, e]) => ({ start: s, end: e })));
+      srts[i] = list?.length ? srtText(list, speed) : null;
+
+      const p = { ...post, duration: d, keep, burnSubs: post.burnSubs && srts[i] };
+      if (!needsPost(p)) continue;
+      const cutLabel = keep && [fx.cutSilence && "blancs", sponsor?.length && "pubs"].filter(Boolean).join(" et ");
+      setP(pBase, fileTag + "Finition : " + [cutLabel, label].filter(Boolean).join(", ") + "…");
+      results[i] = await postProcess(job, results[i], p, m, f => setP(pBase + f * wCrop / results.length));
+    }
+    if (removedTotal >= 0.5 && !job.note) job.note = `${Math.round(removedTotal)} s retirées`;
     if (job.status !== "running") throw Object.assign(new Error("annulé"), { cancelled: true });
 
     try {
@@ -1445,8 +1557,9 @@ if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
   handle("get-settings", async () => {
     await ready;
     const logo = settings.logo && fs.existsSync(path.join(app.getPath("userData"), settings.logo)) ? settings.logoName || settings.logo : "";
-    return { downloadDir: settings.downloadDir, ytdlp: await ytdlpVersion(), version: app.getVersion(), termsAccepted: termsAccepted(), prefs: settings.prefs || {}, logo };
+    return { downloadDir: settings.downloadDir, ytdlp: await ytdlpVersion(), version: app.getVersion(), termsAccepted: termsAccepted(), prefs: settings.prefs || {}, logo, presets: settings.presets || [] };
   });
+  handle("save-presets", list => { settings.presets = sanitizePresets(list); saveSettings(); return settings.presets; });
   handle("save-prefs", p => { settings.prefs = { ...(settings.prefs || {}), ...sanitizePrefs(p) }; saveSettings(); return true; });
   handle("frame-at", (token, t) => frameAt(token, t));
   handle("snapshot", o => snapshot(o));

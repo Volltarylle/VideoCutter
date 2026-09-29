@@ -276,3 +276,11 @@ body.locked main { filter: blur(2px); pointer-events: none; user-select: none; }
 
 @media (max-width: 560px) { .times { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .bar > div { transition: none; } .bar.indet > div { animation: none; width: 100%; opacity: .5; } }
+
+/* Favoris : menu discret à droite des formats, gestion dans un petit encadré */
+.preset-sel { margin-left: auto; width: 150px; color: var(--accent-ink); }
+.preset-box { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line); display: grid; gap: 8px; }
+.preset-box input[type=text] { padding: 8px 12px; min-width: 180px; }
+.preset-list { list-style: none; margin: 0; padding: 0; }
+.preset-list li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.preset-list li.empty { color: var(--muted); border: 0; }
