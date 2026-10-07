@@ -277,6 +277,7 @@
     "Musique ": "Music ", "Vidéo ": "Video ",
     "vidéo entière": "whole video",
     "lecture du lien…": "reading the link…",
+    "en attente d'un téléchargement en cours…": "waiting for a download in progress…",
     "direct en cours": "live stream in progress",
     "erreur inattendue": "unexpected error",
 

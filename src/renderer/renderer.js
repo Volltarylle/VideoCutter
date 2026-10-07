@@ -169,13 +169,14 @@ function fillQualities(heights) {
 $("urlForm").addEventListener("submit", async e => {
   e.preventDefault();
   const url = $("url").value.trim();
-  if (!url) return;
+  if (!url || $("loadBtn").disabled) return; // un chargement est déjà en cours (glisser-déposer, presse-papiers…)
   $("loadErr").hidden = true; $("loginHere").hidden = true;
   $("loadBtn").disabled = true; $("loadBtn").textContent = T("Chargement…");
   try {
     const j = await Promise.race([
       api.info(url),
-      new Promise(r => setTimeout(() => r({ error: "Le chargement a pris trop de temps. Réessaie." }), 60000)),
+      // Le moteur abandonne de lui-même après 60 s (deux fois si le site demande une connexion)
+      new Promise(r => setTimeout(() => r({ error: "Le chargement a pris trop de temps. Réessaie." }), 150000)),
     ]);
     if (j.error) return showLoadError(j.error, j.loginUrl);
     if (j.isLive) return showLoadError("Les directs en cours ne peuvent pas être téléchargés.");
@@ -374,8 +375,10 @@ $("langLink").textContent = EN ? "Français" : "English";
 $("langLink").lang = EN ? "fr" : "en";
 $("langLink").onclick = async e => {
   e.preventDefault();
-  if (currentJob && !confirm(T("Un téléchargement est en cours : il sera annulé. Continuer ?"))) return;
-  if (currentJob) await api.cancel(currentJob);
+  const busy = currentJob || queue.some(q => q.status === "waiting" || q.status === "running");
+  if (busy && !confirm(T("Un téléchargement est en cours : il sera annulé. Continuer ?"))) return;
+  queueStopAsked = true;
+  for (const id of [currentJob, ...queue.filter(q => q.status === "running").map(q => q.jobId)]) if (id) await api.cancel(id);
   await api.setLang(EN ? "fr" : "en");
   location.reload();
 };
@@ -1062,7 +1065,7 @@ $("queueAdd").onclick = () => {
   if (!info) return;
   const opts = { ...currentOpts(), start: info.start, end: info.end, segments: segments.map(s => ({ ...s })), name: $("fileName").value.trim() };
   const parts = segments.length ? T(`${segments.length} extrait${segments.length > 1 ? "s" : ""}`) : info.duration && (info.start > 0.05 || info.end < info.duration - 0.05) ? `${fmt(info.start)} → ${fmt(info.end)}` : T("vidéo entière");
-  queue.push({ id: ++queueSeq, status: "waiting", token: info.token, title: $("fileName").value.trim() || info.title, opts, detail: parts + " · " + describe(opts) });
+  queue.push({ id: ++queueSeq, status: "waiting", token: info.token, url: info.url, title: $("fileName").value.trim() || info.title, opts, detail: parts + " · " + describe(opts) });
   renderQueue();
   const b = $("queueAdd"); b.textContent = "✓"; setTimeout(() => { b.textContent = "＋"; }, 1500);
 };
@@ -1124,16 +1127,28 @@ async function runQueue() {
   while (!queueStopAsked && (q = queue.find(o => o.status === "waiting"))) {
     q.status = "running"; q.percent = null; q.msg = ""; renderQueue();
     try {
-      if (!q.token) { // lien collé : on lit d'abord les infos de la vidéo
-        q.msg = "lecture du lien…"; renderQueue();
-        const j = await api.info(q.url);
-        if (j.error) { q.status = "error"; q.msg = j.error.split("\n")[0]; continue; }
-        if (j.isLive) { q.status = "error"; q.msg = "direct en cours"; continue; }
-        q.token = j.token; q.title = j.title; q.msg = "";
-        if (q.opts.mode === "video" && !j.hasVideo) q.opts.mode = "audio", q.opts.format = "mp3";
-        q.opts.name = $("cleanNames").checked ? cleanTitle(j.title) : j.title;
+      let r = null;
+      for (let attempt = 0; attempt < 2 && !r; attempt++) {
+        if (!q.token) { // lien collé (ou informations expirées) : on lit d'abord les infos de la vidéo
+          q.msg = "lecture du lien…"; renderQueue();
+          const j = await api.info(q.url);
+          if (j.error) { q.status = "error"; q.msg = j.error.split("\n")[0]; break; }
+          if (j.isLive) { q.status = "error"; q.msg = "direct en cours"; break; }
+          q.token = j.token; q.msg = "";
+          if (!q.opts.name) { q.title = j.title; q.opts.name = $("cleanNames").checked ? cleanTitle(j.title) : j.title; }
+          if (q.opts.mode === "video" && !j.hasVideo) q.opts.mode = "audio", q.opts.format = "mp3";
+        }
+        r = await api.download({ ...q.opts, token: q.token });
+        // Déjà 3 téléchargements en cours (lancés à la main) : on attend notre tour au lieu d'échouer
+        while (r.error && /^Trop de téléchargements/.test(r.error) && !queueStopAsked) {
+          q.msg = "en attente d'un téléchargement en cours…"; renderQueue();
+          await new Promise(res => setTimeout(res, 3000));
+          r = await api.download({ ...q.opts, token: q.token });
+        }
+        if (r.error && /^Recharge le lien/.test(r.error) && q.url && attempt === 0) { q.token = null; r = null; } // informations expirées : relues une fois
       }
-      const r = await api.download({ ...q.opts, token: q.token });
+      if (q.status === "error") continue;
+      q.msg = "";
       if (r.error) { q.status = "error"; q.msg = r.error; continue; }
       q.jobId = r.id; renderQueue();
       await new Promise(res => queueWaiters.set(r.id, res));

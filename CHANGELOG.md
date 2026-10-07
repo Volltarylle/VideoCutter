@@ -42,6 +42,13 @@
 - **Qualité** : recadrage, vitesse, effets, incrustations, son et taille sont appliqués en un seul réencodage (meilleure image, plus rapide).
 - **Plus rapide** : si seul le son change (retrait du son, volume, fondu sonore), l'image est copiée telle quelle, sans réencodage.
 - Bouton de téléchargement plus clair quand les extraits sont recollés.
+- Démarrage plus rapide : la version de yt-dlp n'est plus relue à chaque fois.
+
+### Corrections
+- La miniature de fin d'extrait restait parfois noire tout près de la fin de la vidéo.
+- File d'attente : un extrait ajouté à la main pouvait échouer (« Recharge le lien ») après le chargement de nombreuses vidéos ; il attend désormais son tour au lieu d'échouer quand 3 téléchargements tournent déjà.
+- Changer de langue pendant la file d'attente l'arrêtait sans prévenir.
+- Un lien glissé ou collé pendant un chargement en cours lançait un second chargement.
 
 ## 1.1.0
 

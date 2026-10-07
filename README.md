@@ -6,8 +6,41 @@
 
 <p align="center">
   Télécharge <b>seulement le passage qui t'intéresse</b> d'une vidéo en ligne,<br>
-  en vidéo ou en musique, sans passer par un logiciel de montage.
+  en vidéo ou en musique, sans passer par un logiciel de montage.<br>
+  <i>Download <b>only the part you want</b> from YouTube and 1000+ sites — free, open source, for Windows.</i>
 </p>
+
+<p align="center">
+  <a href="https://github.com/Volltarylle/VideoCutter/releases/latest"><img src="https://img.shields.io/github/v/release/Volltarylle/VideoCutter?label=version&color=7c3aed" alt="Dernière version"></a>
+  <a href="https://github.com/Volltarylle/VideoCutter/releases"><img src="https://img.shields.io/github/downloads/Volltarylle/VideoCutter/total?color=7c3aed" alt="Téléchargements"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-7c3aed" alt="Windows 10 | 11">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-GPL--3.0-7c3aed" alt="Licence GPL-3.0"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/Volltarylle/VideoCutter/releases/latest"><b>⬇️ Télécharger VideoCutter pour Windows / Download for Windows</b></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshot-1.jpg" width="49%" alt="VideoCutter : choisir le passage d'une vidéo YouTube">
+  <img src="docs/screenshot-2.jpg" width="49%" alt="VideoCutter : options d'export (9:16, GIF, MP3, sous-titres…)">
+</p>
+
+---
+
+## 🇬🇧 In English
+
+**VideoCutter** is a free Windows app to **download just a clip of a YouTube video** (or from X/Twitter, Instagram, TikTok, Reddit, Twitch, Vimeo, SoundCloud… 1000+ sites), as video or audio — no video editor needed.
+
+Paste a link → set the start and end on the preview → choose MP4, GIF or MP3 → only that part is downloaded.
+
+- **Cut**: frame-accurate trimming with preview, chapters, multiple clips at once (separate or joined), remove a part, keyboard shortcuts.
+- **Export**: MP4, MKV, WEBM, MOV, AVI, GIF, MP3, WAV, FLAC, M4A, OGG, OPUS · vertical 9:16 / square / 4:5 (cropped or blurred background) for TikTok, Reels and Shorts · speed, fade, normalized volume, boomerang, text and logo overlay, subtitles, max file size (Discord 10 MB).
+- **Smart cuts**: automatically remove silences, and skip sponsored segments on YouTube (SponsorBlock).
+- **Comfort**: download queue and whole playlists, favorite presets, history, drag the finished file into any app, auto-update. English and French interface.
+- **Private**: no account, no server, no tracking. Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org).
+
+👉 **[Download the installer](https://github.com/Volltarylle/VideoCutter/releases/latest)** (`VideoCutter-Setup-x.y.z.exe`). Windows SmartScreen may warn because the installer is not signed: click *More info* → *Run anyway*.
 
 ---
 

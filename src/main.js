@@ -238,14 +238,17 @@ async function ensureYtdlp() {
   fs.mkdirSync(USER_BIN, { recursive: true });
   fs.mkdirSync(TEMP_ROOT, { recursive: true });
   for (const leftover of ["yt-dlp-new", "yt-dlp-old", "yt-dlp.exe"]) fs.rmSync(path.join(USER_BIN, leftover), { recursive: true, force: true });
-  const current = fs.existsSync(YTDLP) ? await ytdlpVersion(YTDLP) : null;
-  const shipped = await ytdlpVersion(path.join(BUNDLED_YTDLP_DIR, "yt-dlp.exe"));
+  // Les deux versions sont lues en parallèle (chaque lecture lance yt-dlp : environ une seconde)
+  const [current, shipped] = await Promise.all([fs.existsSync(YTDLP) ? ytdlpVersion(YTDLP) : null, ytdlpVersion(path.join(BUNDLED_YTDLP_DIR, "yt-dlp.exe"))]);
+  ytdlpVer = current;
   // Copie la version fournie si aucune n'est installée, si elle est cassée, ou si elle est plus récente.
   if (!current || (shipped && shipped > current)) {
     fs.rmSync(YTDLP_DIR, { recursive: true, force: true });
     fs.cpSync(BUNDLED_YTDLP_DIR, YTDLP_DIR, { recursive: true });
+    ytdlpVer = shipped;
   }
 }
+let ytdlpVer = null; // version installée, gardée en mémoire (mise à jour après chaque mise à jour de yt-dlp)
 
 // Mise à jour de yt-dlp : téléchargement depuis la page officielle GitHub (HTTPS),
 // vérification de l'empreinte SHA-256 publiée, test du nouvel exécutable, puis échange.
@@ -264,7 +267,7 @@ async function installYtdlpUpdate() {
   try { tag = JSON.parse((await fetchBuf("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest", 1e6)).toString("utf8")).tag_name; }
   catch (e) { throw new Error("impossible de joindre GitHub (" + e.message + ")"); }
   if (typeof tag !== "string" || !/^\d{4}\.\d{2}\.\d{2}(\.\d+)?$/.test(tag)) throw new Error("version introuvable");
-  const current = await ytdlpVersion();
+  const current = ytdlpVer || await ytdlpVersion();
   const forceForTest = !app.isPackaged && process.env.VIDEOCUTTER_TEST_UPDATE === "1";
   if (current && current >= tag && !forceForTest) return { updated: false, version: current };
 
@@ -303,6 +306,7 @@ async function updateYtdlp(force = false) {
     try {
       const r = await installYtdlpUpdate();
       settings.lastUpdateCheck = Date.now(); saveSettings();
+      ytdlpVer = r.version;
       return { updated: r.updated, after: r.version };
     } catch (e) {
       return { error: "La mise à jour a échoué : " + e.message };
@@ -334,7 +338,7 @@ function cleanError(stderr) {
 
 // Infos des vidéos chargées, gardées côté moteur : la fenêtre ne manipule qu'un jeton.
 const infos = new Map();
-const MAX_INFOS = 30;
+const MAX_INFOS = 300; // assez pour une longue file d'attente (chaque vidéo en garde une)
 const httpUrl = s => { try { const u = new URL(s); return (u.protocol === "https:" || u.protocol === "http:") && !isPrivateHost(u.hostname) ? u.toString() : null; } catch { return null; } };
 
 // En-têtes HTTP à rejouer pour l'aperçu (ceux que le site exige), limités au latin-1.
@@ -605,15 +609,22 @@ async function frameAt(token, t) {
   if (frameCache.has(key)) return frameCache.get(key);
   const src = entry.frameSrc;
   const hdr = Object.entries(src.headers).map(([k, v]) => `${k}: ${v}\r\n`).join("");
-  const args = ["-hide_banner", "-nostdin", "-loglevel", "error", "-rw_timeout", "10000000",
-    "-protocol_whitelist", "https,http,tls,tcp,crypto,hls", "-ss", t.toFixed(2)];
-  if (hdr) args.push("-headers", hdr);
-  args.push("-i", src.url, "-frames:v", "1", "-vf", "scale=-2:180", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "5", "pipe:1");
-  const img = await new Promise(resolve => execFile(FFMPEG(), args,
-    { env: CHILD_ENV, windowsHide: true, timeout: 20000, encoding: "buffer", maxBuffer: 4 * 1024 * 1024 },
-    (err, out) => resolve(!err && out?.length > 100 && out[0] === 0xff && out[1] === 0xd8 ? "data:image/jpeg;base64," + out.toString("base64") : null)));
-  frameCache.set(key, img);
-  while (frameCache.size > 60) frameCache.delete(frameCache.keys().next().value);
+  const grab = at => {
+    const args = ["-hide_banner", "-nostdin", "-loglevel", "error", "-rw_timeout", "10000000",
+      "-protocol_whitelist", "https,http,tls,tcp,crypto,hls", "-ss", at.toFixed(2)];
+    if (hdr) args.push("-headers", hdr);
+    args.push("-i", src.url, "-frames:v", "1", "-vf", "scale=-2:180", "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "5", "pipe:1");
+    return new Promise(resolve => execFile(FFMPEG(), args,
+      { env: CHILD_ENV, windowsHide: true, timeout: 20000, encoding: "buffer", maxBuffer: 4 * 1024 * 1024 },
+      (err, out) => resolve(!err && out?.length > 100 && out[0] === 0xff && out[1] === 0xd8 ? "data:image/jpeg;base64," + out.toString("base64") : null)));
+  };
+  // Tout près de la fin, il n'y a parfois plus d'image à extraire : on recule un peu
+  let img = await grab(t);
+  if (!img && t > 0.5) img = await grab(Math.max(0, t - (entry.duration - t < 2 ? 1.5 : 0.5)));
+  if (img) { // un échec (réseau…) n'est pas mémorisé : il sera retenté
+    frameCache.set(key, img);
+    while (frameCache.size > 60) frameCache.delete(frameCache.keys().next().value);
+  }
   return img;
 }
 
@@ -1557,7 +1568,7 @@ if (app.isPackaged && DEBUG_SWITCHES.some(s => app.commandLine.hasSwitch(s))) {
   handle("get-settings", async () => {
     await ready;
     const logo = settings.logo && fs.existsSync(path.join(app.getPath("userData"), settings.logo)) ? settings.logoName || settings.logo : "";
-    return { downloadDir: settings.downloadDir, ytdlp: await ytdlpVersion(), version: app.getVersion(), termsAccepted: termsAccepted(), prefs: settings.prefs || {}, logo, presets: settings.presets || [] };
+    return { downloadDir: settings.downloadDir, ytdlp: ytdlpVer || (ytdlpVer = await ytdlpVersion()), version: app.getVersion(), termsAccepted: termsAccepted(), prefs: settings.prefs || {}, logo, presets: settings.presets || [] };
   });
   handle("save-presets", list => { settings.presets = sanitizePresets(list); saveSettings(); return settings.presets; });
   handle("save-prefs", p => { settings.prefs = { ...(settings.prefs || {}), ...sanitizePrefs(p) }; saveSettings(); return true; });
